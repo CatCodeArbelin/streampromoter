@@ -3,6 +3,8 @@ import logging
 import random
 from collections.abc import Callable
 
+import aiohttp
+
 from kick_promoter.viewer.kick_viewer import KickViewer
 
 logger = logging.getLogger(__name__)
@@ -32,6 +34,50 @@ class ViewerPool:
         self._active_ws_connections = max(0, self._active_ws_connections + delta)
         self._emit_telemetry()
 
+    async def _resolve_channel_id(self, session: aiohttp.ClientSession) -> str:
+        channel = str(self.config.get("kick_channel", "")).strip()
+        if not channel:
+            raise RuntimeError("kick_channel is required")
+
+        url = f"https://kick.com/api/v2/channels/{channel}"
+        backoff = 1
+        for _ in range(5):
+            try:
+                async with session.get(url, timeout=10) as response:
+                    response.raise_for_status()
+                    payload = await response.json()
+                    channel_id = str(payload.get("id", "")).strip()
+                    if channel_id:
+                        return channel_id
+                    raise RuntimeError("empty channel id")
+            except Exception as exc:
+                logger.warning("component=viewer_pool event=resolve_channel_id_failed error=%s", exc)
+                await asyncio.sleep(backoff)
+                backoff = min(backoff * 2, 30)
+        raise RuntimeError("cannot resolve channel id")
+
+    async def _resolve_chatroom_id(self, session: aiohttp.ClientSession, channel: str) -> str:
+        configured_chatroom_id = str(self.config.get("kick_chatroom_id", "")).strip()
+        if configured_chatroom_id:
+            return configured_chatroom_id
+
+        url = f"https://kick.com/api/v2/channels/{channel}/chatroom"
+        backoff = 1
+        for _ in range(5):
+            try:
+                async with session.get(url, timeout=10) as response:
+                    response.raise_for_status()
+                    payload = await response.json()
+                    chatroom_id = str(payload.get("id", "")).strip()
+                    if chatroom_id:
+                        return chatroom_id
+                    raise RuntimeError("empty chatroom id")
+            except Exception as exc:
+                logger.warning("component=viewer_pool event=resolve_chatroom_id_failed error=%s", exc)
+                await asyncio.sleep(backoff)
+                backoff = min(backoff * 2, 30)
+        raise RuntimeError("cannot resolve chatroom id")
+
     async def start(self) -> None:
         if self._running:
             return
@@ -41,8 +87,18 @@ class ViewerPool:
         self._started_workers = 0
         self._active_ws_connections = 0
         self._emit_telemetry()
+        channel = str(self.config.get("kick_channel", "")).strip()
+        async with aiohttp.ClientSession() as session:
+            channel_id = await self._resolve_channel_id(session)
+            chatroom_id = await self._resolve_chatroom_id(session, channel)
         for i in range(count):
-            viewer = KickViewer(self.config, i + 1, on_ws_connection_change=self._on_ws_connection_change)
+            viewer = KickViewer(
+                self.config,
+                i + 1,
+                channel_id=channel_id,
+                chatroom_id=chatroom_id,
+                on_ws_connection_change=self._on_ws_connection_change,
+            )
             task = asyncio.create_task(viewer.run(), name=f"viewer-{i + 1}")
             self.viewers.append(viewer)
             self.tasks.append(task)
