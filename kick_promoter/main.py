@@ -3,6 +3,7 @@ import contextlib
 import json
 import logging
 import os
+import socket
 from pathlib import Path
 
 import aiohttp
@@ -11,12 +12,36 @@ from kick_promoter.ai_bot.chat_poster import ChatPoster
 from kick_promoter.ai_bot.openai_client import OpenAIClient
 from kick_promoter.viewer.viewer_pool import ViewerPool
 
-LOG_FORMAT = "%(asctime)s | %(levelname)s | %(name)s | %(message)s"
+LOG_FORMAT = "%(asctime)s | %(levelname)s | %(name)s | node_id=%(node_id)s | %(message)s"
 logger = logging.getLogger(__name__)
 
 
-def setup_logging() -> None:
+def resolve_node_id() -> str:
+    env_node_id = str(os.getenv("NODE_ID", "")).strip()
+    if env_node_id:
+        return env_node_id
+
+    hostname = str(os.getenv("HOSTNAME", "")).strip()
+    if hostname:
+        return hostname
+
+    return socket.gethostname()
+
+
+class NodeContextFilter(logging.Filter):
+    def __init__(self, node_id: str):
+        super().__init__()
+        self.node_id = node_id
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if not hasattr(record, "node_id"):
+            record.node_id = self.node_id
+        return True
+
+
+def setup_logging(node_id: str) -> None:
     logging.basicConfig(level=logging.INFO, format=LOG_FORMAT)
+    logging.getLogger().addFilter(NodeContextFilter(node_id))
 
 
 def _env_bool(value: str) -> bool:
@@ -179,8 +204,10 @@ async def run_bot(config: dict) -> None:
 
 
 def main() -> None:
-    setup_logging()
+    node_id = resolve_node_id()
+    setup_logging(node_id=node_id)
     config = load_config()
+    config.setdefault("node_id", node_id)
     try:
         asyncio.run(run_bot(config))
     except KeyboardInterrupt:
