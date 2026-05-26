@@ -1,6 +1,7 @@
 {
   "kick_channel": "example_channel",
   "kick_chatroom_id": "",
+  "chat_token": "",
   "viewer_count": 5,
   "viewer_ping_interval_sec": 20,
   "chat_ping_interval_sec": 20,
