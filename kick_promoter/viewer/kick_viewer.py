@@ -16,6 +16,7 @@ class KickViewer:
         self.viewer_id = viewer_id
         self._running = True
         self._ws: Optional[websockets.WebSocketClientProtocol] = None
+        self._ws_uri = "wss://websockets.kick.com/viewer/v1/connect"
 
     async def resolve_channel_id(self, session: aiohttp.ClientSession) -> str:
         channel = self.config["kick_channel"]
@@ -106,8 +107,13 @@ class KickViewer:
                     await chat_task
 
     async def _connect_viewer_loop(self, channel_id: str, viewer_token: str) -> None:
-        uri = "wss://websockets.kick.com/viewer/v1/connect"
-        async with websockets.connect(uri, ping_interval=None) as ws:
+        async with websockets.connect(
+            self._ws_uri,
+            ping_interval=None,
+            max_queue=1,
+            compression=None,
+            close_timeout=3,
+        ) as ws:
             self._ws = ws
             await ws.send(
                 json.dumps(
@@ -120,15 +126,11 @@ class KickViewer:
                     }
                 )
             )
-            ping_task = asyncio.create_task(self._ping_loop(ws, 30))
             try:
                 async for message in ws:
-                    logger.debug("viewer=%s msg=%s", self.viewer_id, message)
                     await self._handle_ws_message(ws, message)
             finally:
-                ping_task.cancel()
-                with contextlib.suppress(Exception):
-                    await ping_task
+                self._ws = None
 
     async def _connect_chat_loop(self, chatroom_id: str) -> None:
         uri = "wss://ws-us2.pusher.com/app/32cbd69e4b950bf97679"
@@ -161,13 +163,6 @@ class KickViewer:
             return
         if payload.get("event") == "pusher:ping":
             await ws.send(json.dumps({"event": "pusher:pong", "data": {}}))
-
-    async def _ping_loop(self, ws, timeout_sec: int) -> None:
-        while self._running:
-            await asyncio.sleep(timeout_sec)
-            if ws.closed:
-                return
-            await ws.send(json.dumps({"event": "pusher:ping", "data": {}}))
 
     async def stop(self) -> None:
         self._running = False

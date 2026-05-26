@@ -1,11 +1,16 @@
 import asyncio
+import base64
 import logging
 
 logger = logging.getLogger(__name__)
 
 
 class AudioCapture:
-    CHUNK_SIZE = 96000
+    SAMPLE_RATE = 24000
+    BYTES_PER_SAMPLE = 2
+    CHANNELS = 1
+    CHUNK_SECONDS = 2
+    CHUNK_SIZE = SAMPLE_RATE * BYTES_PER_SAMPLE * CHANNELS * CHUNK_SECONDS
 
     def __init__(self, stream_url: str):
         self.stream_url = stream_url
@@ -67,7 +72,7 @@ class AudioCapture:
         await self._start_ffmpeg(resolved_stream_url)
         logger.info("AudioCapture started")
 
-    async def chunks(self):
+    async def chunks_base64(self):
         backoff_seconds = 1
         while not self._stopped:
             try:
@@ -82,7 +87,7 @@ class AudioCapture:
                     raise RuntimeError("unexpected EOF from ffmpeg")
 
                 backoff_seconds = 1
-                yield chunk
+                yield base64.b64encode(chunk).decode("utf-8")
             except Exception as exc:
                 if self._stopped:
                     break
@@ -94,6 +99,10 @@ class AudioCapture:
                 await self.stop()
                 await asyncio.sleep(backoff_seconds)
                 backoff_seconds = min(backoff_seconds * 2, 30)
+
+    async def chunks(self):
+        async for chunk_b64 in self.chunks_base64():
+            yield base64.b64decode(chunk_b64)
 
     async def stop(self) -> None:
         self._stopped = True
