@@ -6,7 +6,7 @@ from queue import Queue
 
 from flask import Flask, Response, jsonify, render_template, request
 
-from kick_promoter.main import load_config, run_bot
+from kick_promoter.main import Runner, load_config
 
 app = Flask(__name__)
 state = {
@@ -18,6 +18,20 @@ state = {
     "task": None,
     "logs": Queue(),
 }
+STOP_JOIN_TIMEOUT_SEC = 10
+
+
+class ServiceManager:
+    def __init__(self):
+        self.runner: Runner | None = None
+
+    def status(self) -> dict:
+        if self.runner:
+            return self.runner.status()
+        return {"status": "stopped", "started": False, "stopping": False}
+
+
+service_manager = ServiceManager()
 
 
 class SSELogHandler(logging.Handler):
@@ -92,7 +106,8 @@ def start():
         loop = asyncio.new_event_loop()
         state["loop"] = loop
         asyncio.set_event_loop(loop)
-        state["task"] = loop.create_task(run_bot(config))
+        service_manager.runner = Runner(config)
+        state["task"] = loop.create_task(service_manager.runner.start())
         try:
             loop.run_until_complete(state["task"])
             if state["status"] != "error":
@@ -115,8 +130,26 @@ def stop():
     if not state["running"]:
         state["status"] = "stopped"
         return jsonify({"ok": True, "status": "already_stopped"})
-    if state["task"]:
-        state["loop"].call_soon_threadsafe(state["task"].cancel)
+    loop = state.get("loop")
+    runner = service_manager.runner
+
+    if loop and runner:
+        asyncio.run_coroutine_threadsafe(runner.stop(), loop)
+
+    if state["task"] and loop:
+        loop.call_soon_threadsafe(state["task"].cancel)
+
+    thread = state.get("thread")
+    if thread:
+        thread.join(timeout=STOP_JOIN_TIMEOUT_SEC)
+        if thread.is_alive():
+            state["status"] = "stopping"
+            return jsonify({"ok": False, "status": "stopping", "error": "stop timeout"}), 504
+
+    service_manager.runner = None
+    state["loop"] = None
+    state["task"] = None
+    state["thread"] = None
     state["running"] = False
     state["status"] = "stopped"
     return jsonify({"ok": True, "status": state["status"]})
@@ -124,7 +157,14 @@ def stop():
 
 @app.route("/status")
 def status():
-    return jsonify({"running": state["running"], "status": state["status"], "error": state["error"]})
+    return jsonify(
+        {
+            "running": state["running"],
+            "status": state["status"],
+            "error": state["error"],
+            "service": service_manager.status(),
+        }
+    )
 
 
 @app.route("/logs")

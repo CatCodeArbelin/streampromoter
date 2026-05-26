@@ -22,7 +22,18 @@ class ViewerPool:
         logger.info("Started %s viewers", count)
 
     async def wait(self) -> None:
-        await asyncio.gather(*self.tasks)
+        if not self.tasks:
+            return
+        results = await asyncio.gather(*self.tasks, return_exceptions=True)
+        for task, result in zip(self.tasks, results):
+            if isinstance(result, asyncio.CancelledError):
+                logger.info("component=viewer_pool event=viewer_cancelled task=%s", task.get_name())
+            elif isinstance(result, Exception):
+                logger.error(
+                    "component=viewer_pool event=viewer_failed task=%s error=%s",
+                    task.get_name(),
+                    result,
+                )
 
     async def stop(self) -> None:
         for viewer in self.viewers:
@@ -30,4 +41,4 @@ class ViewerPool:
         for task in self.tasks:
             task.cancel()
         await asyncio.gather(*self.tasks, return_exceptions=True)
-        logger.info("ViewerPool stopped gracefully")
+        logger.info("component=viewer_pool event=stopped")
