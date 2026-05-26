@@ -18,7 +18,7 @@ class OpenAIClient:
         self.enabled = bool(config.get("openai_enabled", False))
         self._task = None
         self._running = True
-        self._throttle = int(self.config.get("openai_throttle_sec", 15))
+        self._throttle = int(self.config.get("message_cooldown_seconds", self.config.get("openai_throttle_sec", 15)))
         self._last_published_at = 0.0
 
     async def run(self) -> None:

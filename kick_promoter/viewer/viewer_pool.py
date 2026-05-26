@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import random
 
 from kick_promoter.viewer.kick_viewer import KickViewer
 
@@ -56,8 +57,7 @@ class ViewerPool:
         if not self._running:
             return
         self._running = False
-        for viewer in self.viewers:
-            await viewer.stop()
+        await self.graceful_stop()
         for task in self.tasks:
             task.cancel()
         await asyncio.gather(*self.tasks, return_exceptions=True)
@@ -66,3 +66,8 @@ class ViewerPool:
             await asyncio.gather(self._status_task, return_exceptions=True)
             self._status_task = None
         logger.info("component=viewer_pool event=stopped")
+
+    async def graceful_stop(self) -> None:
+        for viewer in self.viewers:
+            await viewer.stop()
+            await asyncio.sleep(random.uniform(0.1, 0.5))
