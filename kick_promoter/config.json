@@ -1,7 +1,7 @@
 {
   "kick_channel": "example_channel",
   "kick_chatroom_id": "",
-  "chat_token": "",
+  "chat_token": "YOUR_KICK_CHAT_TOKEN",
   "viewer_count": 5,
   "viewer_ping_interval_sec": 20,
   "chat_ping_interval_sec": 20,
@@ -9,7 +9,7 @@
   "max_reconnect_attempts": 0,
   "reconnect_base_delay": 1,
   "openai_enabled": false,
-  "openai_api_key": "",
+  "openai_api_key": "YOUR_OPENAI_API_KEY",
   "openai_model": "gpt-realtime",
   "openai_voice": "alloy",
   "openai_throttle_sec": 15,
