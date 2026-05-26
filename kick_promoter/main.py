@@ -4,6 +4,8 @@ import logging
 import os
 from pathlib import Path
 
+import aiohttp
+
 from kick_promoter.ai_bot.chat_poster import ChatPoster
 from kick_promoter.ai_bot.openai_client import OpenAIClient
 from kick_promoter.viewer.viewer_pool import ViewerPool
@@ -54,18 +56,20 @@ def load_config(path: str = "kick_promoter/config.json") -> dict:
 
 
 async def run_bot(config: dict) -> None:
-    poster = ChatPoster(config)
-    viewer_pool = ViewerPool(config)
-    await viewer_pool.start()
+    timeout_sec = int(config.get("post_timeout_sec", 10))
+    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=timeout_sec)) as session:
+        poster = ChatPoster(config, session=session)
+        viewer_pool = ViewerPool(config)
+        await viewer_pool.start()
 
-    openai_client = OpenAIClient(config=config, chat_poster=poster)
-    openai_task = asyncio.create_task(openai_client.run(), name="openai-client")
+        openai_client = OpenAIClient(config=config, chat_poster=poster)
+        openai_task = asyncio.create_task(openai_client.run(), name="openai-client")
 
-    try:
-        await asyncio.gather(viewer_pool.wait(), openai_task)
-    finally:
-        await viewer_pool.stop()
-        await openai_client.stop()
+        try:
+            await asyncio.gather(viewer_pool.wait(), openai_task)
+        finally:
+            await viewer_pool.stop()
+            await openai_client.stop()
 
 
 def main() -> None:
