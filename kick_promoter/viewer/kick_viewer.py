@@ -3,6 +3,7 @@ import json
 import logging
 import contextlib
 import random
+from collections.abc import Callable
 from typing import Optional
 
 import aiohttp
@@ -12,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 
 class KickViewer:
-    def __init__(self, config: dict, viewer_id: int):
+    def __init__(self, config: dict, viewer_id: int, on_ws_connection_change: Callable[[int], None] | None = None):
         self.config = config
         self.viewer_id = viewer_id
         self._running = True
@@ -22,6 +23,7 @@ class KickViewer:
         self._reconnect_base_delay = float(self.config.get("reconnect_base_delay", 1))
         self._max_reconnect_attempts = int(self.config.get("max_reconnect_attempts", 0))
         self._reconnect_max_delay = 30.0
+        self._on_ws_connection_change = on_ws_connection_change
 
     async def resolve_channel_id(self, session: aiohttp.ClientSession) -> str:
         channel = self.config["kick_channel"]
@@ -141,6 +143,8 @@ class KickViewer:
             close_timeout=3,
         ) as ws:
             self._ws = ws
+            if self._on_ws_connection_change:
+                self._on_ws_connection_change(1)
             await ws.send(
                 json.dumps(
                     {
@@ -156,6 +160,8 @@ class KickViewer:
                 async for message in ws:
                     await self._handle_ws_message(ws, message)
             finally:
+                if self._on_ws_connection_change:
+                    self._on_ws_connection_change(-1)
                 self._ws = None
 
     async def _connect_chat_loop(self, chatroom_id: str) -> None:

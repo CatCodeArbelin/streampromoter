@@ -18,6 +18,13 @@ state = {
     "task": None,
     "logs": Queue(),
     "events": Queue(),
+    "runtime": {
+        "progress": 0,
+        "started_workers": 0,
+        "target_workers": 0,
+        "active_ws_connections": 0,
+        "ai_last_messages": [],
+    },
 }
 STOP_JOIN_TIMEOUT_SEC = 10
 
@@ -36,6 +43,17 @@ service_manager = ServiceManager()
 
 
 def publish_event(event: str, **payload):
+    if event == "telemetry":
+        runtime = state["runtime"]
+        for field in ("started_workers", "target_workers", "active_ws_connections"):
+            if field in payload:
+                runtime[field] = int(payload[field])
+        target = runtime.get("target_workers", 0)
+        started = runtime.get("started_workers", 0)
+        runtime["progress"] = int((started / target) * 100) if target > 0 else 0
+        ai_message = payload.get("ai_message")
+        if ai_message:
+            runtime["ai_last_messages"] = (runtime["ai_last_messages"] + [str(ai_message)])[-5:]
     state["events"].put({"event": event, **payload})
 
 
@@ -106,13 +124,14 @@ def start():
 
     state["status"] = "starting"
     state["error"] = None
+    state["runtime"] = {"progress": 0, "started_workers": 0, "target_workers": 0, "active_ws_connections": 0, "ai_last_messages": []}
     publish_event("lifecycle", phase="start", progress=10, status=state["status"], message="Starting workers")
 
     def worker():
         loop = asyncio.new_event_loop()
         state["loop"] = loop
         asyncio.set_event_loop(loop)
-        service_manager.runner = Runner(config)
+        service_manager.runner = Runner(config, telemetry_callback=lambda **payload: publish_event("telemetry", **payload))
         publish_event("lifecycle", phase="start", progress=40, status="starting", message="Runtime initialized")
         state["task"] = loop.create_task(service_manager.runner.start())
         try:
@@ -178,6 +197,7 @@ def status():
             "status": state["status"],
             "error": state["error"],
             "service": service_manager.status(),
+            "runtime": state["runtime"],
         }
     )
 
