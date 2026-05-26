@@ -18,8 +18,10 @@ class ChatPoster:
             logger.info("Mock post: %s", text)
             return
         url = f"https://kick.com/api/v2/messages/send/{chatroom_id}"
+        token = self.config.get("chat_token", "")
+        headers = {"Authorization": f"Bearer {token}"} if token else None
         backoff = 1
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession(headers=headers) as session:
             for _ in range(5):
                 try:
                     async with session.post(url, json={"content": text}, timeout=10) as response:
