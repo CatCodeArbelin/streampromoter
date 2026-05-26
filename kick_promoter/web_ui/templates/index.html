@@ -20,6 +20,7 @@
   </form>
   <button id="stop">Stop</button>
   <div id="status">status: {{ state.status }}</div>
+  <div id="progress">progress: 0%</div>
   <div id="error" style="color:red;"></div>
   <pre id="logs"></pre>
   <script>
@@ -29,6 +30,7 @@
       statusEl.textContent = `status: ${data.status}`;
       errorEl.textContent = data.error ? `error: ${data.error}` : '';
     };
+    const progressEl = document.getElementById('progress');
 
     document.getElementById('start-form').onsubmit = async (e) => {
       e.preventDefault();
@@ -58,6 +60,13 @@
     const logs = document.getElementById('logs');
     const es = new EventSource('/logs');
     es.onmessage = (ev) => { logs.textContent += ev.data + "\n"; logs.scrollTop = logs.scrollHeight; };
+
+    const events = new EventSource('/events');
+    events.onmessage = (ev) => {
+      const data = JSON.parse(ev.data);
+      if (typeof data.progress === 'number') progressEl.textContent = `progress: ${data.progress}%`;
+      if (data.status) statusEl.textContent = `status: ${data.status}`;
+    };
   </script>
 </body>
 </html>

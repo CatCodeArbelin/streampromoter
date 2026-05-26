@@ -17,6 +17,7 @@ state = {
     "loop": None,
     "task": None,
     "logs": Queue(),
+    "events": Queue(),
 }
 STOP_JOIN_TIMEOUT_SEC = 10
 
@@ -32,6 +33,10 @@ class ServiceManager:
 
 
 service_manager = ServiceManager()
+
+
+def publish_event(event: str, **payload):
+    state["events"].put({"event": event, **payload})
 
 
 class SSELogHandler(logging.Handler):
@@ -99,22 +104,26 @@ def start():
     if errors:
         return jsonify({"ok": False, "errors": errors}), 400
 
-    state["status"] = "running"
+    state["status"] = "starting"
     state["error"] = None
+    publish_event("lifecycle", phase="start", progress=10, status=state["status"], message="Starting workers")
 
     def worker():
         loop = asyncio.new_event_loop()
         state["loop"] = loop
         asyncio.set_event_loop(loop)
         service_manager.runner = Runner(config)
+        publish_event("lifecycle", phase="start", progress=40, status="starting", message="Runtime initialized")
         state["task"] = loop.create_task(service_manager.runner.start())
         try:
             loop.run_until_complete(state["task"])
             if state["status"] != "error":
                 state["status"] = "stopped"
+                publish_event("lifecycle", phase="stop", progress=100, status=state["status"], message="Stopped")
         except Exception as exc:
             state["status"] = "error"
             state["error"] = str(exc)
+            publish_event("lifecycle", phase="error", progress=100, status=state["status"], message=str(exc))
             logging.exception("Runner failed")
         finally:
             state["running"] = False
@@ -122,6 +131,8 @@ def start():
     state["thread"] = threading.Thread(target=worker, daemon=True)
     state["thread"].start()
     state["running"] = True
+    state["status"] = "running"
+    publish_event("lifecycle", phase="start", progress=100, status=state["status"], message="Running")
     return jsonify({"ok": True, "status": state["status"]})
 
 
@@ -130,11 +141,14 @@ def stop():
     if not state["running"]:
         state["status"] = "stopped"
         return jsonify({"ok": True, "status": "already_stopped"})
+    state["status"] = "stopping"
+    publish_event("lifecycle", phase="stop", progress=10, status=state["status"], message="Stopping workers")
     loop = state.get("loop")
     runner = service_manager.runner
 
     if loop and runner:
         asyncio.run_coroutine_threadsafe(runner.stop(), loop)
+        publish_event("lifecycle", phase="stop", progress=50, status=state["status"], message="Stop requested")
 
     if state["task"] and loop:
         loop.call_soon_threadsafe(state["task"].cancel)
@@ -152,6 +166,7 @@ def stop():
     state["thread"] = None
     state["running"] = False
     state["status"] = "stopped"
+    publish_event("lifecycle", phase="stop", progress=100, status=state["status"], message="Stopped")
     return jsonify({"ok": True, "status": state["status"]})
 
 
@@ -173,6 +188,16 @@ def logs():
         while True:
             line = state["logs"].get()
             yield f"data: {line}\n\n"
+
+    return Response(stream(), mimetype="text/event-stream")
+
+
+@app.route("/events")
+def events():
+    def stream():
+        while True:
+            event = state["events"].get()
+            yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
 
     return Response(stream(), mimetype="text/event-stream")
 

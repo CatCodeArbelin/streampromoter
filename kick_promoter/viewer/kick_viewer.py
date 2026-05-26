@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import contextlib
+import random
 from typing import Optional
 
 import aiohttp
@@ -17,6 +18,10 @@ class KickViewer:
         self._running = True
         self._ws: Optional[websockets.WebSocketClientProtocol] = None
         self._ws_uri = "wss://websockets.kick.com/viewer/v1/connect"
+        self._startup_jitter_max = float(self.config.get("startup_jitter_max", 2))
+        self._reconnect_base_delay = float(self.config.get("reconnect_base_delay", 1))
+        self._max_reconnect_attempts = int(self.config.get("max_reconnect_attempts", 0))
+        self._reconnect_max_delay = 30.0
 
     async def resolve_channel_id(self, session: aiohttp.ClientSession) -> str:
         channel = self.config["kick_channel"]
@@ -92,15 +97,36 @@ class KickViewer:
             chat_task = None
             if self.config.get("chat_token", ""):
                 chat_task = asyncio.create_task(self._chat_reconnect_loop(chatroom_id))
+            reconnect_attempt = 0
+            reconnect_delay = self._reconnect_base_delay
             while self._running:
                 try:
+                    if self._startup_jitter_max > 0:
+                        await asyncio.sleep(random.uniform(0, self._startup_jitter_max))
                     viewer_token = await self.get_viewer_token(session)
                     await self._connect_viewer_loop(channel_id, viewer_token)
+                    reconnect_attempt = 0
+                    reconnect_delay = self._reconnect_base_delay
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:
-                    logger.warning("viewer=%s ws reconnect after error: %s", self.viewer_id, exc)
-                    await asyncio.sleep(3)
+                    reconnect_attempt += 1
+                    if self._max_reconnect_attempts and reconnect_attempt > self._max_reconnect_attempts:
+                        logger.error(
+                            "viewer=%s ws reconnect attempts exceeded max=%s",
+                            self.viewer_id,
+                            self._max_reconnect_attempts,
+                        )
+                        break
+                    logger.warning(
+                        "viewer=%s ws reconnect attempt=%s delay=%.1fs error=%s",
+                        self.viewer_id,
+                        reconnect_attempt,
+                        reconnect_delay,
+                        exc,
+                    )
+                    await asyncio.sleep(reconnect_delay)
+                    reconnect_delay = min(reconnect_delay * 2, self._reconnect_max_delay)
             if chat_task:
                 chat_task.cancel()
                 with contextlib.suppress(Exception):
