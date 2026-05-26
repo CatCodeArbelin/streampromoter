@@ -1,0 +1,15 @@
+{
+  "kick_channel": "example_channel",
+  "kick_chatroom_id": "",
+  "viewer_count": 5,
+  "viewer_ping_interval_sec": 20,
+  "chat_ping_interval_sec": 20,
+  "openai_enabled": false,
+  "openai_api_key": "",
+  "openai_model": "gpt-realtime",
+  "openai_voice": "alloy",
+  "openai_throttle_sec": 15,
+  "post_interval_sec": 30,
+  "web_host": "0.0.0.0",
+  "web_port": 5000
+}
