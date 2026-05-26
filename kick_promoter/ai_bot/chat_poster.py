@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import random
+from collections.abc import Callable
 from pathlib import Path
 
 import aiohttp
@@ -9,7 +10,7 @@ logger = logging.getLogger(__name__)
 
 
 class ChatPoster:
-    def __init__(self, config: dict, session: aiohttp.ClientSession):
+    def __init__(self, config: dict, session: aiohttp.ClientSession, telemetry_callback: Callable[..., None] | None = None):
         self.config = config
         self.session = session
         runtime_phrases = config.get("runtime_phrases") or []
@@ -21,6 +22,7 @@ class ChatPoster:
                 for phrase in Path("kick_promoter/phrases.txt").read_text(encoding="utf-8").splitlines()
                 if phrase.strip()
             ]
+        self._telemetry_callback = telemetry_callback
 
     async def post(self, text: str) -> None:
         chatroom_id = self.config.get("kick_chatroom_id")
@@ -45,6 +47,8 @@ class ChatPoster:
                     timeout=aiohttp.ClientTimeout(total=timeout_sec),
                 ) as response:
                     if response.status < 400:
+                        if self.config.get("openai_enabled") and self._telemetry_callback:
+                            self._telemetry_callback(ai_message=text)
                         return
 
                     if response.status == 429 or response.status >= 500:

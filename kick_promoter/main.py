@@ -67,7 +67,7 @@ def load_config(path: str = "kick_promoter/config.json") -> dict:
 
 
 class Runner:
-    def __init__(self, config: dict):
+    def __init__(self, config: dict, telemetry_callback=None):
         self.config = config
         self._stop_event = asyncio.Event()
         self._started = False
@@ -76,6 +76,7 @@ class Runner:
         self._viewer_pool = None
         self._openai_client = None
         self._openai_task = None
+        self._telemetry_callback = telemetry_callback
 
     def status(self) -> dict:
         return {
@@ -93,8 +94,8 @@ class Runner:
         self._status = "running"
         timeout_sec = int(self.config.get("post_timeout_sec", 10))
         self._session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=timeout_sec))
-        poster = ChatPoster(self.config, session=self._session)
-        self._viewer_pool = ViewerPool(self.config)
+        poster = ChatPoster(self.config, session=self._session, telemetry_callback=self._telemetry_callback)
+        self._viewer_pool = ViewerPool(self.config, telemetry_callback=self._telemetry_callback)
         self._openai_client = OpenAIClient(config=self.config, chat_poster=poster)
 
         logger.info("component=runner event=start")
