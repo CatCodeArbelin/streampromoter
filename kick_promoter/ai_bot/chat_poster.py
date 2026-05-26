@@ -12,11 +12,15 @@ class ChatPoster:
     def __init__(self, config: dict, session: aiohttp.ClientSession):
         self.config = config
         self.session = session
-        self.phrases = [
-            phrase.strip()
-            for phrase in Path("kick_promoter/phrases.txt").read_text(encoding="utf-8").splitlines()
-            if phrase.strip()
-        ]
+        runtime_phrases = config.get("runtime_phrases") or []
+        if runtime_phrases:
+            self.phrases = [phrase.strip() for phrase in runtime_phrases if str(phrase).strip()]
+        else:
+            self.phrases = [
+                phrase.strip()
+                for phrase in Path("kick_promoter/phrases.txt").read_text(encoding="utf-8").splitlines()
+                if phrase.strip()
+            ]
 
     async def post(self, text: str) -> None:
         chatroom_id = self.config.get("kick_chatroom_id")
