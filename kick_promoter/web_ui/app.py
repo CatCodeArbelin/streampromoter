@@ -150,8 +150,6 @@ def start():
     state["thread"] = threading.Thread(target=worker, daemon=True)
     state["thread"].start()
     state["running"] = True
-    state["status"] = "running"
-    publish_event("lifecycle", phase="start", progress=100, status=state["status"], message="Running")
     return jsonify({"ok": True, "status": state["status"]})
 
 

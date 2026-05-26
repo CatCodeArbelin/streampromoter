@@ -85,6 +85,22 @@ class Runner:
             "stopping": self._stop_event.is_set(),
         }
 
+    async def _assert_channel_live(self) -> None:
+        channel = str(self.config.get("kick_channel", "")).strip()
+        if not channel:
+            raise RuntimeError("kick_channel is required")
+
+        assert self._session is not None
+        url = f"https://kick.com/api/v2/channels/{channel}"
+        async with self._session.get(url) as response:
+            if response.status != 200:
+                raise RuntimeError("Channel is not live. Load test aborted.")
+            payload = await response.json(content_type=None)
+
+        livestream = payload.get("livestream") if isinstance(payload, dict) else None
+        if not livestream:
+            raise RuntimeError("Channel is not live. Load test aborted.")
+
     async def start(self) -> None:
         if self._started:
             logger.info("component=runner event=start_skip reason=already_started")
@@ -99,6 +115,8 @@ class Runner:
         self._openai_client = OpenAIClient(config=self.config, chat_poster=poster)
 
         logger.info("component=runner event=start")
+        logger.info("component=runner event=assert_channel_live")
+        await self._assert_channel_live()
         logger.info("component=viewer_pool event=start")
         await self._viewer_pool.start()
 
