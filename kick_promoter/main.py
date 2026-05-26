@@ -102,6 +102,8 @@ class Runner:
         self._openai_client = None
         self._openai_task = None
         self._telemetry_callback = telemetry_callback
+        self._viewer_pool_stop_timeout_sec = float(self.config.get("viewer_pool_stop_timeout_sec", 15))
+        self._openai_stop_timeout_sec = float(self.config.get("openai_stop_timeout_sec", 10))
 
     def status(self) -> dict:
         return {
@@ -126,7 +128,36 @@ class Runner:
         if not livestream:
             raise RuntimeError("Channel is not live. Load test aborted.")
 
+    async def _run_openai_with_restarts(self) -> None:
+        backoff_sec = 1.0
+        max_backoff_sec = float(self.config.get("openai_restart_backoff_max_sec", 30))
+
+        while self._status == "running" and not self._stop_event.is_set():
+            try:
+                await self._openai_client.run()
+                if self._stop_event.is_set() or self._status != "running":
+                    break
+                logger.warning("component=openai_client event=run_completed_unexpectedly action=restart")
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                if self._stop_event.is_set() or self._status != "running":
+                    break
+                logger.exception(
+                    "component=openai_client event=run_failed action=restart backoff_sec=%.1f",
+                    backoff_sec,
+                )
+
+            await asyncio.sleep(backoff_sec)
+            backoff_sec = min(backoff_sec * 2, max_backoff_sec)
+
     async def start(self) -> None:
+        if self._status == "running":
+            logger.info("component=runner event=start_skip reason=already_running")
+            return
+        if self._status == "stopping" or self._stop_event.is_set():
+            logger.info("component=runner event=start_skip reason=stopping")
+            return
         if self._started:
             logger.info("component=runner event=start_skip reason=already_started")
             return
@@ -146,18 +177,16 @@ class Runner:
         await self._viewer_pool.start()
 
         logger.info("component=openai_client event=start")
-        self._openai_task = asyncio.create_task(self._openai_client.run(), name="openai-client")
+        self._openai_task = asyncio.create_task(self._run_openai_with_restarts(), name="openai-watchdog")
 
         waiter = asyncio.create_task(self._stop_event.wait(), name="runner-stop-waiter")
         viewer_wait = asyncio.create_task(self._viewer_pool.wait(), name="viewer-pool-wait")
-        done, pending = await asyncio.wait({waiter, viewer_wait, self._openai_task}, return_when=asyncio.FIRST_COMPLETED)
+        done, pending = await asyncio.wait({waiter, viewer_wait}, return_when=asyncio.FIRST_COMPLETED)
 
         if waiter in done:
             logger.info("component=runner event=stop_event_received")
         elif viewer_wait in done:
             logger.warning("component=viewer_pool event=completed_or_failed")
-        elif self._openai_task in done:
-            logger.warning("component=openai_client event=completed_or_failed")
 
         for task in pending:
             task.cancel()
@@ -167,7 +196,11 @@ class Runner:
         await self.stop()
 
     async def stop(self) -> None:
-        if self._status in {"stopped", "stopping"}:
+        if self._status == "stopped":
+            logger.info("component=runner event=stop_skip reason=already_stopped")
+            return
+        if self._status == "stopping":
+            logger.info("component=runner event=stop_skip reason=already_stopping")
             return
 
         self._status = "stopping"
@@ -176,12 +209,18 @@ class Runner:
         logger.info("component=runner event=stop timeout=%s", stop_timeout)
 
         if self._viewer_pool:
-            logger.info("component=viewer_pool event=stop")
-            await self._viewer_pool.stop()
+            logger.info("component=viewer_pool event=stop timeout=%s", self._viewer_pool_stop_timeout_sec)
+            try:
+                await asyncio.wait_for(self._viewer_pool.stop(), timeout=self._viewer_pool_stop_timeout_sec)
+            except asyncio.TimeoutError:
+                logger.warning("component=viewer_pool event=stop_timeout timeout=%s", self._viewer_pool_stop_timeout_sec)
 
         if self._openai_client:
-            logger.info("component=openai_client event=stop")
-            await self._openai_client.stop()
+            logger.info("component=openai_client event=stop timeout=%s", self._openai_stop_timeout_sec)
+            try:
+                await asyncio.wait_for(self._openai_client.stop(), timeout=self._openai_stop_timeout_sec)
+            except asyncio.TimeoutError:
+                logger.warning("component=openai_client event=stop_timeout timeout=%s", self._openai_stop_timeout_sec)
 
         if self._openai_task:
             with contextlib.suppress(asyncio.TimeoutError):
@@ -194,6 +233,7 @@ class Runner:
         if self._session:
             await self._session.close()
 
+        self._started = False
         self._status = "stopped"
         logger.info("component=runner event=stopped")
 
