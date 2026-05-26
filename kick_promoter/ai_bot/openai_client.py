@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import contextlib
 import json
 import logging
 import time
@@ -18,6 +19,8 @@ class OpenAIClient:
         self.enabled = bool(config.get("openai_enabled", False))
         self._task = None
         self._running = True
+        self._throttle = int(self.config.get("openai_throttle_sec", 15))
+        self._last_published_at = 0.0
 
     async def run(self) -> None:
         if not self.enabled:
@@ -25,54 +28,102 @@ class OpenAIClient:
             await self.chat_poster.fallback_loop()
             return
 
-        uri = "wss://api.openai.com/v1/realtime?model=" + self.config.get("openai_model", "gpt-realtime")
+        realtime_endpoint = self.config.get("openai_realtime_endpoint", "wss://api.openai.com/v1/realtime")
+        model = self.config.get("openai_model", "gpt-4o-realtime-preview")
+        uri = f"{realtime_endpoint}?model={model}"
         headers = {
             "Authorization": f"Bearer {self.config.get('openai_api_key', '')}",
             "OpenAI-Beta": "realtime=v1",
         }
         audio = AudioCapture(f"https://kick.com/{self.config.get('kick_channel')}")
         await audio.start()
-        throttle = int(self.config.get("openai_throttle_sec", 15))
-        last_sent = 0.0
+        backoff = 1
+        max_backoff = int(self.config.get("openai_reconnect_max_backoff_sec", 30))
 
-        async with websockets.connect(uri, additional_headers=headers, ping_interval=20) as ws:
-            await ws.send(
-                json.dumps(
-                    {
-                        "type": "session.update",
-                        "session": {
-                            "voice": self.config.get("openai_voice", "alloy"),
-                            "modalities": ["text"],
-                        },
-                    }
-                )
-            )
-            consumer = asyncio.create_task(self._consume(ws))
-            try:
-                async for chunk in audio.chunks():
-                    now = time.time()
-                    if now - last_sent < throttle:
-                        continue
-                    last_sent = now
-                    await ws.send(
-                        json.dumps(
-                            {
-                                "type": "input_audio_buffer.append",
-                                "audio": base64.b64encode(chunk).decode("utf-8"),
-                            }
+        try:
+            while self._running:
+                try:
+                    async with websockets.connect(uri, additional_headers=headers, ping_interval=20) as ws:
+                        await ws.send(
+                            json.dumps(
+                                {
+                                    "type": "session.update",
+                                    "session": {
+                                        "voice": self.config.get("openai_voice", "alloy"),
+                                        "modalities": ["text"],
+                                        "instructions": self.config.get(
+                                            "openai_instructions",
+                                            "Пиши коротко, остроумно и дружелюбно, с легким юмором.",
+                                        ),
+                                        "input_audio_transcription": {"enabled": True},
+                                    },
+                                }
+                            )
                         )
-                    )
-            finally:
-                consumer.cancel()
-                await audio.stop()
+                        backoff = 1
+                        consumer = asyncio.create_task(self._consume(ws))
+                        try:
+                            async for chunk in audio.chunks():
+                                if not self._running:
+                                    break
+                                await ws.send(
+                                    json.dumps(
+                                        {
+                                            "type": "input_audio_buffer.append",
+                                            "audio": base64.b64encode(chunk).decode("utf-8"),
+                                        }
+                                    )
+                                )
+                        finally:
+                            consumer.cancel()
+                            with contextlib.suppress(asyncio.CancelledError):
+                                await consumer
+                except websockets.ConnectionClosed as exc:
+                    if not self._running:
+                        break
+                    logger.warning("Realtime websocket disconnected (%s). Reconnecting in %ss", exc, backoff)
+                    await asyncio.sleep(backoff)
+                    backoff = min(backoff * 2, max_backoff)
+                except Exception:
+                    if not self._running:
+                        break
+                    logger.exception("Unexpected realtime client error. Reconnecting in %ss", backoff)
+                    await asyncio.sleep(backoff)
+                    backoff = min(backoff * 2, max_backoff)
+        finally:
+            await audio.stop()
 
     async def _consume(self, ws) -> None:
+        pending = {}
+
         async for message in ws:
             data = json.loads(message)
-            if data.get("type") == "response.text.delta":
-                text = data.get("delta", "").strip()
+            msg_type = data.get("type")
+
+            if msg_type == "response.text.delta":
+                key = (
+                    data.get("response_id"),
+                    data.get("output_index", 0),
+                    data.get("content_index", 0),
+                )
+                pending[key] = pending.get(key, "") + data.get("delta", "")
+            elif msg_type == "response.text.done":
+                key = (
+                    data.get("response_id"),
+                    data.get("output_index", 0),
+                    data.get("content_index", 0),
+                )
+                text = (pending.pop(key, "") or data.get("text", "")).strip()
                 if text:
-                    await self.chat_poster.post(text)
+                    await self._post_final(text)
+
+    async def _post_final(self, text: str) -> None:
+        now = time.time()
+        if now - self._last_published_at < self._throttle:
+            return
+
+        self._last_published_at = now
+        await self.chat_poster.post(text)
 
     async def stop(self) -> None:
         self._running = False
