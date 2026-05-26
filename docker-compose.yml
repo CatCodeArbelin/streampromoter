@@ -1,0 +1,8 @@
+services:
+  kick-promoter:
+    build: .
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./kick_promoter/config.json:/app/kick_promoter/config.json
+      - ./kick_promoter/phrases.txt:/app/kick_promoter/phrases.txt

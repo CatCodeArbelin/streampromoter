@@ -1,0 +1,21 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <title>Kick Promoter</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <h1>Kick Promoter Panel</h1>
+  <button id="start">Start</button>
+  <button id="stop">Stop</button>
+  <pre id="logs"></pre>
+  <script>
+    document.getElementById('start').onclick = () => fetch('/start',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+    document.getElementById('stop').onclick = () => fetch('/stop',{method:'POST'});
+    const logs = document.getElementById('logs');
+    const es = new EventSource('/logs');
+    es.onmessage = (ev) => { logs.textContent += ev.data + "\n"; logs.scrollTop = logs.scrollHeight; };
+  </script>
+</body>
+</html>
