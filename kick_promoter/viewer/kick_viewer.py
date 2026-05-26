@@ -13,9 +13,18 @@ logger = logging.getLogger(__name__)
 
 
 class KickViewer:
-    def __init__(self, config: dict, viewer_id: int, on_ws_connection_change: Callable[[int], None] | None = None):
+    def __init__(
+        self,
+        config: dict,
+        viewer_id: int,
+        channel_id: str,
+        chatroom_id: str,
+        on_ws_connection_change: Callable[[int], None] | None = None,
+    ):
         self.config = config
         self.viewer_id = viewer_id
+        self.channel_id = channel_id
+        self.chatroom_id = chatroom_id
         self._running = True
         self._ws: Optional[websockets.WebSocketClientProtocol] = None
         self._ws_uri = "wss://websockets.kick.com/viewer/v1/connect"
@@ -24,44 +33,12 @@ class KickViewer:
         self._max_reconnect_attempts = int(self.config.get("max_reconnect_attempts", 0))
         self._reconnect_max_delay = 30.0
         self._on_ws_connection_change = on_ws_connection_change
-
-    async def resolve_channel_id(self, session: aiohttp.ClientSession) -> str:
-        channel = self.config["kick_channel"]
-        url = f"https://kick.com/api/v2/channels/{channel}"
-        backoff = 1
-        for _ in range(5):
-            try:
-                async with session.get(url, timeout=10) as response:
-                    response.raise_for_status()
-                    payload = await response.json()
-                    channel_id = str(payload.get("id", ""))
-                    if channel_id:
-                        return channel_id
-                    raise RuntimeError("empty channel id")
-            except Exception as exc:
-                logger.warning("viewer=%s resolve_channel_id error: %s", self.viewer_id, exc)
-                await asyncio.sleep(backoff)
-                backoff = min(backoff * 2, 30)
-        raise RuntimeError("cannot resolve channel id")
-
-    async def resolve_chatroom_id(self, session: aiohttp.ClientSession) -> str:
-        channel = self.config["kick_channel"]
-        url = f"https://kick.com/api/v2/channels/{channel}/chatroom"
-        backoff = 1
-        for _ in range(5):
-            try:
-                async with session.get(url, timeout=10) as response:
-                    response.raise_for_status()
-                    payload = await response.json()
-                    chatroom_id = str(payload.get("id", ""))
-                    if chatroom_id:
-                        return chatroom_id
-                    raise RuntimeError("empty chatroom id")
-            except Exception as exc:
-                logger.warning("viewer=%s resolve_chatroom_id error: %s", self.viewer_id, exc)
-                await asyncio.sleep(backoff)
-                backoff = min(backoff * 2, 30)
-        raise RuntimeError("cannot resolve chatroom id")
+        logger.info(
+            "component=kick_viewer event=initialized viewer=%s channel_id=%s chatroom_id=%s",
+            self.viewer_id,
+            self.channel_id,
+            self.chatroom_id,
+        )
 
     async def get_viewer_token(self, session: aiohttp.ClientSession) -> str:
         client_token = self.config.get("chat_token", "")
@@ -88,25 +65,17 @@ class KickViewer:
 
     async def run(self) -> None:
         async with aiohttp.ClientSession() as session:
-            channel_id = await self.resolve_channel_id(session)
-            chatroom_id = await self.resolve_chatroom_id(session)
-            logger.debug(
-                "viewer=%s resolved channel_id=%s chatroom_id=%s",
-                self.viewer_id,
-                channel_id,
-                chatroom_id,
-            )
             chat_task = None
             if self.config.get("chat_token", ""):
-                chat_task = asyncio.create_task(self._chat_reconnect_loop(chatroom_id))
+                chat_task = asyncio.create_task(self._chat_reconnect_loop(self.chatroom_id))
             reconnect_attempt = 0
             reconnect_delay = self._reconnect_base_delay
+            if self._startup_jitter_max > 0:
+                await asyncio.sleep(random.uniform(0, self._startup_jitter_max))
             while self._running:
                 try:
-                    if self._startup_jitter_max > 0:
-                        await asyncio.sleep(random.uniform(0, self._startup_jitter_max))
                     viewer_token = await self.get_viewer_token(session)
-                    await self._connect_viewer_loop(channel_id, viewer_token)
+                    await self._connect_viewer_loop(self.channel_id, viewer_token)
                     reconnect_attempt = 0
                     reconnect_delay = self._reconnect_base_delay
                 except asyncio.CancelledError:
