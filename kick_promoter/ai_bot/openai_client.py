@@ -1,5 +1,4 @@
 import asyncio
-import base64
 import contextlib
 import json
 import logging
@@ -63,14 +62,14 @@ class OpenAIClient:
                         backoff = 1
                         consumer = asyncio.create_task(self._consume(ws))
                         try:
-                            async for chunk in audio.chunks():
+                            async for chunk in audio.chunks_base64():
                                 if not self._running:
                                     break
                                 await ws.send(
                                     json.dumps(
                                         {
                                             "type": "input_audio_buffer.append",
-                                            "audio": base64.b64encode(chunk).decode("utf-8"),
+                                            "audio": chunk,
                                         }
                                     )
                                 )
