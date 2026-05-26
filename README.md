@@ -61,6 +61,20 @@ python -m kick_promoter.web_ui.app
 
 После запуска Web UI доступен по `http://127.0.0.1:5000` (или по `web_host:web_port` из `config.json`).
 
+### Smoke-проверка Web UI (нагрузочный стенд)
+
+Минимальный сценарий проверки, что Web UI поднимается в чистом окружении:
+
+```bash
+python -m venv .venv-smoke
+source .venv-smoke/bin/activate
+pip install -r requirements.txt
+python -m kick_promoter.web_ui.app
+```
+
+Ожидаемый результат: в консоли появляется `Serving Flask app`, UI доступен по `http://127.0.0.1:5000`.
+Для остановки используйте `Ctrl+C`.
+
 ### Запуск через Docker Compose
 
 ```bash
