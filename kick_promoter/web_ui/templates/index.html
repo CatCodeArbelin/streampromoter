@@ -7,12 +7,54 @@
 </head>
 <body>
   <h1>Kick Promoter Panel</h1>
-  <button id="start">Start</button>
+  <form id="start-form" enctype="multipart/form-data">
+    <label>channel_name <input name="channel_name" value="{{ config.kick_channel }}" required /></label><br/>
+    <label>viewers_count <input name="viewers_count" type="number" min="1" value="{{ config.viewer_count }}" required /></label><br/>
+    <label>chat_token <input name="chat_token" value="{{ config.chat_token }}" /></label><br/>
+    <label>openai_api_key <input name="openai_api_key" value="{{ config.openai_api_key }}" /></label><br/>
+    <label>enable_ai_bot <input name="enable_ai_bot" type="checkbox" {% if config.openai_enabled %}checked{% endif %} /></label><br/>
+    <label>phrases_text</label><br/>
+    <textarea name="phrases_text" rows="6" cols="80" placeholder="one phrase per line"></textarea><br/>
+    <label>phrases.txt <input name="phrases_file" type="file" accept=".txt" /></label><br/>
+    <button id="start" type="submit">Start</button>
+  </form>
   <button id="stop">Stop</button>
+  <div id="status">status: {{ state.status }}</div>
+  <div id="error" style="color:red;"></div>
   <pre id="logs"></pre>
   <script>
-    document.getElementById('start').onclick = () => fetch('/start',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
-    document.getElementById('stop').onclick = () => fetch('/stop',{method:'POST'});
+    const statusEl = document.getElementById('status');
+    const errorEl = document.getElementById('error');
+    const setStatus = (data) => {
+      statusEl.textContent = `status: ${data.status}`;
+      errorEl.textContent = data.error ? `error: ${data.error}` : '';
+    };
+
+    document.getElementById('start-form').onsubmit = async (e) => {
+      e.preventDefault();
+      const formData = new FormData(e.target);
+      if (!formData.get('enable_ai_bot')) formData.set('enable_ai_bot', 'false');
+      else formData.set('enable_ai_bot', 'true');
+      const resp = await fetch('/start', {method:'POST', body: formData});
+      const data = await resp.json();
+      if (!resp.ok) {
+        errorEl.textContent = (data.errors || ['start failed']).join('; ');
+        return;
+      }
+      setStatus({status: data.status || 'running', error: null});
+    };
+
+    document.getElementById('stop').onclick = async () => {
+      const resp = await fetch('/stop',{method:'POST'});
+      const data = await resp.json();
+      setStatus(data);
+    };
+
+    setInterval(async () => {
+      const resp = await fetch('/status');
+      if (resp.ok) setStatus(await resp.json());
+    }, 2000);
+
     const logs = document.getElementById('logs');
     const es = new EventSource('/logs');
     es.onmessage = (ev) => { logs.textContent += ev.data + "\n"; logs.scrollTop = logs.scrollHeight; };
