@@ -26,6 +26,15 @@ def _env_bool(value: str) -> bool:
 def load_config(path: str = "kick_promoter/config.json") -> dict:
     config = json.loads(Path(path).read_text(encoding="utf-8"))
 
+    secrets_path = Path("kick_promoter/secrets.json")
+    if secrets_path.exists():
+        try:
+            secrets_config = json.loads(secrets_path.read_text(encoding="utf-8"))
+            if isinstance(secrets_config, dict):
+                config.update(secrets_config)
+        except json.JSONDecodeError:
+            logger.warning("component=config event=invalid_secrets_json path=%s", secrets_path)
+
     str_map = {
         "KICK_CHANNEL": "kick_channel",
         "KICK_CHATROOM_ID": "kick_chatroom_id",

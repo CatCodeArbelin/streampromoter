@@ -111,7 +111,7 @@ docker compose up --build
 
 ## 5) Переменные окружения
 
-Поддерживаются env-переопределения (приоритет выше `config.json`):
+Поддерживаются env-переопределения (приоритет выше `config.json` и `secrets.json`):
 
 - `KICK_CHANNEL`
 - `KICK_CHATROOM_ID`
@@ -137,6 +137,26 @@ export OPENAI_ENABLED=true
 export OPENAI_API_KEY='sk-...'
 python -m kick_promoter.web_ui.app
 ```
+
+
+### Безопасное хранение секретов для нагрузочных прогонов
+
+1. В `kick_promoter/config.json` оставляйте только плейсхолдеры:
+   - `YOUR_KICK_CHAT_TOKEN`
+   - `YOUR_OPENAI_API_KEY`
+2. Реальные секреты храните в `kick_promoter/secrets.json` (файл добавлен в `.gitignore` и не должен коммититься):
+
+```json
+{
+  "chat_token": "your-real-kick-chat-token",
+  "openai_api_key": "sk-..."
+}
+```
+
+3. Приоритет источников конфигурации:
+   `config.json` < `secrets.json` < переменные окружения.
+
+Для CI/CD и временных нагрузочных прогонов рекомендуется задавать секреты через env-переменные (`CHAT_TOKEN`, `OPENAI_API_KEY`) — они перекрывают значения из файлов.
 
 ## 6) Включение / выключение OpenAI-режима
 
