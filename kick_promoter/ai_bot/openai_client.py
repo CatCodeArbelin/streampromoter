@@ -20,6 +20,9 @@ class OpenAIClient:
         self._running = True
         self._throttle = int(self.config.get("message_cooldown_seconds", self.config.get("openai_throttle_sec", 15)))
         self._last_published_at = 0.0
+        self._outbox: asyncio.Queue[str | None] = asyncio.Queue()
+        self._poster_task: asyncio.Task | None = None
+        self._last_enqueued_text: str | None = None
 
     async def run(self) -> None:
         if not self.enabled:
@@ -40,6 +43,7 @@ class OpenAIClient:
         max_backoff = int(self.config.get("openai_reconnect_max_backoff_sec", 30))
 
         try:
+            self._poster_task = asyncio.create_task(self._poster_loop())
             while self._running:
                 try:
                     async with websockets.connect(uri, additional_headers=headers, ping_interval=20) as ws:
@@ -90,6 +94,7 @@ class OpenAIClient:
                     await asyncio.sleep(backoff)
                     backoff = min(backoff * 2, max_backoff)
         finally:
+            await self._shutdown_poster_worker()
             await audio.stop()
 
     async def _consume(self, ws) -> None:
@@ -117,12 +122,47 @@ class OpenAIClient:
                     await self._post_final(text)
 
     async def _post_final(self, text: str) -> None:
-        now = time.time()
-        if now - self._last_published_at < self._throttle:
+        cleaned = text.strip()
+        if not cleaned:
+            return
+        if cleaned == self._last_enqueued_text:
+            return
+        self._last_enqueued_text = cleaned
+        await self._outbox.put(cleaned)
+
+    async def _poster_loop(self) -> None:
+        while self._running:
+            text = await self._outbox.get()
+            if text is None:
+                break
+
+            now = time.time()
+            remaining = self._throttle - (now - self._last_published_at)
+            if remaining > 0:
+                await asyncio.sleep(remaining)
+
+            try:
+                await self.chat_poster.post(text)
+                self._last_published_at = time.time()
+            except Exception:
+                logger.exception("Failed to post final text")
+
+    async def _shutdown_poster_worker(self) -> None:
+        if not self._poster_task:
             return
 
-        self._last_published_at = now
-        await self.chat_poster.post(text)
+        await self._outbox.put(None)
+        try:
+            await asyncio.wait_for(self._poster_task, timeout=5)
+        except asyncio.TimeoutError:
+            logger.warning("Poster worker did not stop in time, cancelling")
+            self._poster_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._poster_task
+        finally:
+            self._poster_task = None
 
     async def stop(self) -> None:
         self._running = False
+        with contextlib.suppress(asyncio.QueueFull):
+            self._outbox.put_nowait(None)
