@@ -21,6 +21,8 @@ class ViewerPool:
         self._started_workers = 0
         self._target_workers = 0
         self._active_ws_connections = 0
+        self._channel_id: str | None = None
+        self._chatroom_id: str | None = None
 
     def _emit_telemetry(self) -> None:
         if self._telemetry_callback:
@@ -78,6 +80,30 @@ class ViewerPool:
                 backoff = min(backoff * 2, 30)
         raise RuntimeError("cannot resolve chatroom id")
 
+    async def get_channel_ids(self) -> tuple[str, str]:
+        if self._channel_id and self._chatroom_id:
+            return self._channel_id, self._chatroom_id
+
+        channel = str(self.config.get("kick_channel", "")).strip()
+        if not channel:
+            raise RuntimeError("kick_channel is required")
+
+        async with aiohttp.ClientSession() as session:
+            channel_id = await self._resolve_channel_id(session)
+            chatroom_id = await self._resolve_chatroom_id(session, channel)
+
+        if not channel_id:
+            raise RuntimeError("empty channel id")
+        if not chatroom_id:
+            raise RuntimeError("empty chatroom id")
+
+        self._channel_id = channel_id
+        self._chatroom_id = chatroom_id
+        return self._channel_id, self._chatroom_id
+
+    def _cleanup_done_tasks(self) -> None:
+        self.tasks = [task for task in self.tasks if not task.done()]
+
     async def start(self) -> None:
         if self._running:
             return
@@ -87,10 +113,8 @@ class ViewerPool:
         self._started_workers = 0
         self._active_ws_connections = 0
         self._emit_telemetry()
-        channel = str(self.config.get("kick_channel", "")).strip()
-        async with aiohttp.ClientSession() as session:
-            channel_id = await self._resolve_channel_id(session)
-            chatroom_id = await self._resolve_chatroom_id(session, channel)
+        channel_id, chatroom_id = await self.get_channel_ids()
+        self._cleanup_done_tasks()
         for i in range(count):
             viewer = KickViewer(
                 self.config,
@@ -110,6 +134,7 @@ class ViewerPool:
     async def _status_loop(self) -> None:
         interval = int(self.config.get("viewer_status_interval_sec", 30))
         while self._running:
+            self._cleanup_done_tasks()
             alive = sum(1 for task in self.tasks if not task.done())
             logger.info(
                 "component=viewer_pool event=status alive=%s total=%s",
@@ -140,6 +165,8 @@ class ViewerPool:
         for task in self.tasks:
             task.cancel()
         await asyncio.gather(*self.tasks, return_exceptions=True)
+        self._cleanup_done_tasks()
+        self.viewers.clear()
         if self._status_task:
             self._status_task.cancel()
             await asyncio.gather(self._status_task, return_exceptions=True)
@@ -149,6 +176,14 @@ class ViewerPool:
         self._emit_telemetry()
 
     async def graceful_stop(self) -> None:
+        stop_timeout = float(self.config.get("viewer_stop_timeout_sec", 0.5))
         for viewer in self.viewers:
-            await viewer.stop()
+            try:
+                await asyncio.wait_for(viewer.stop(), timeout=stop_timeout)
+            except TimeoutError:
+                logger.warning(
+                    "component=viewer_pool event=viewer_stop_timeout viewer_id=%s timeout=%s",
+                    viewer.viewer_id,
+                    stop_timeout,
+                )
             await asyncio.sleep(random.uniform(0.1, 0.5))
