@@ -12,5 +12,7 @@
   "openai_throttle_sec": 15,
   "post_interval_sec": 30,
   "web_host": "0.0.0.0",
-  "web_port": 5000
+  "web_port": 5000,
+  "post_max_retries": 5,
+  "post_timeout_sec": 10
 }
