@@ -48,9 +48,9 @@ class KickViewer:
         )
 
     async def get_viewer_token(self, session: aiohttp.ClientSession) -> str:
-        client_token = self.config.get("chat_token", "")
+        client_token = self.config.get("viewer_token", "") or self.config.get("chat_token", "")
         if not client_token:
-            raise RuntimeError("chat_token is required to get viewer token")
+            raise RuntimeError("viewer_token is required to get viewer token")
 
         url = "https://websockets.kick.com/viewer/v1/token"
         headers = {"X-CLIENT-TOKEN": client_token, "User-Agent": self.user_agent}

@@ -2,6 +2,8 @@
   "kick_channel": "example_channel",
   "kick_chatroom_id": "",
   "x_client_token": "YOUR_X_CLIENT_TOKEN",
+  "_viewer_token_comment": "Use the same static token as x_client_token (e139...). This token is used ONLY for WebSocket viewer connections, NOT for chat.",
+  "viewer_token": "YOUR_VIEWER_TOKEN",
   "chat_token": "YOUR_KICK_CHAT_TOKEN",
   "viewer_count": 5,
   "viewer_ping_interval_sec": 20,
