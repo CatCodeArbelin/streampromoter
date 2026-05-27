@@ -131,7 +131,8 @@ class Runner:
 
         payload = await asyncio.to_thread(_fetch_channel_data)
 
-        if payload.get("is_live") is not True:
+        livestream = payload.get("livestream") or {}
+        if livestream.get("is_live") is not True:
             raise RuntimeError("Channel is not live. Load test aborted.")
 
     async def _run_openai_with_restarts(self) -> None:
