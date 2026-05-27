@@ -104,7 +104,57 @@ class ViewerPool:
     def _cleanup_done_tasks(self) -> None:
         self.tasks = [task for task in self.tasks if not task.done()]
 
-    async def start(self) -> None:
+    def _create_viewer_task(self, worker_index: int, channel_id: str, chatroom_id: str) -> None:
+        viewer = KickViewer(
+            self.config,
+            worker_index + 1,
+            channel_id=channel_id,
+            chatroom_id=chatroom_id,
+            on_ws_connection_change=self._on_ws_connection_change,
+        )
+        task = asyncio.create_task(viewer.run(), name=f"viewer-{worker_index + 1}")
+        self.viewers.append(viewer)
+        self.tasks.append(task)
+        self._started_workers += 1
+        self._emit_telemetry()
+
+    async def start_gradually(self, total_count: int, ramp_up_seconds: float = 60) -> None:
+        ramp_up_seconds = max(float(ramp_up_seconds), 0.0)
+        rate = total_count / ramp_up_seconds if ramp_up_seconds > 0 else float(total_count)
+        logger.info(
+            "component=viewer_pool event=ramp_up_start total_count=%s duration_sec=%s rate=%s",
+            total_count,
+            ramp_up_seconds,
+            rate,
+        )
+
+        channel_id, chatroom_id = await self.get_channel_ids()
+        self._cleanup_done_tasks()
+
+        if total_count <= 0:
+            return
+
+        if ramp_up_seconds <= 0:
+            for i in range(total_count):
+                if not self._running:
+                    break
+                self._create_viewer_task(i, channel_id, chatroom_id)
+            return
+
+        step_interval_sec = ramp_up_seconds / total_count
+        for i in range(total_count):
+            if not self._running:
+                break
+            self._create_viewer_task(i, channel_id, chatroom_id)
+            if i == total_count - 1:
+                break
+            try:
+                await asyncio.sleep(step_interval_sec)
+            except asyncio.CancelledError:
+                logger.info("component=viewer_pool event=ramp_up_cancelled started=%s", self._started_workers)
+                raise
+
+    async def start(self, ramp_up: float | None = None) -> None:
         if self._running:
             return
         self._running = True
@@ -113,21 +163,15 @@ class ViewerPool:
         self._started_workers = 0
         self._active_ws_connections = 0
         self._emit_telemetry()
-        channel_id, chatroom_id = await self.get_channel_ids()
-        self._cleanup_done_tasks()
-        for i in range(count):
-            viewer = KickViewer(
-                self.config,
-                i + 1,
-                channel_id=channel_id,
-                chatroom_id=chatroom_id,
-                on_ws_connection_change=self._on_ws_connection_change,
-            )
-            task = asyncio.create_task(viewer.run(), name=f"viewer-{i + 1}")
-            self.viewers.append(viewer)
-            self.tasks.append(task)
-            self._started_workers += 1
-            self._emit_telemetry()
+        if ramp_up is not None:
+            await self.start_gradually(count, ramp_up)
+        else:
+            channel_id, chatroom_id = await self.get_channel_ids()
+            self._cleanup_done_tasks()
+            for i in range(count):
+                if not self._running:
+                    break
+                self._create_viewer_task(i, channel_id, chatroom_id)
         self._status_task = asyncio.create_task(self._status_loop(), name="viewer-pool-status")
         logger.info("component=viewer_pool event=started count=%s", count)
 
