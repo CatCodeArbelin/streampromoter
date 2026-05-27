@@ -10,6 +10,7 @@ import aiohttp
 
 from kick_promoter.ai_bot.chat_poster import ChatPoster
 from kick_promoter.ai_bot.openai_client import OpenAIClient
+from kick_promoter.token_validator import validate_x_client_token
 from kick_promoter.viewer.viewer_pool import ViewerPool
 
 LOG_FORMAT = "%(asctime)s | %(levelname)s | %(name)s | node_id=%(node_id)s | %(message)s"
@@ -173,6 +174,8 @@ class Runner:
         logger.info("component=runner event=start")
         logger.info("component=runner event=assert_channel_live")
         await self._assert_channel_live()
+        logger.info("component=token_validator event=validate_start")
+        await validate_x_client_token(self.config, self._session)
         logger.info("component=viewer_pool event=start")
         await self._viewer_pool.start()
 
