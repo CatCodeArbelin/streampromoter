@@ -10,6 +10,10 @@ import aiohttp
 import websockets
 
 logger = logging.getLogger(__name__)
+DEFAULT_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36"
+)
 
 
 class KickViewer:
@@ -33,11 +37,14 @@ class KickViewer:
         self._max_reconnect_attempts = int(self.config.get("max_reconnect_attempts", 0))
         self._reconnect_max_delay = 30.0
         self._on_ws_connection_change = on_ws_connection_change
+        user_agents = self.config.get("user_agents")
+        self.user_agent = random.choice(user_agents) if isinstance(user_agents, list) and user_agents else DEFAULT_USER_AGENT
         logger.info(
-            "component=kick_viewer event=initialized viewer=%s channel_id=%s chatroom_id=%s",
+            "component=kick_viewer event=initialized viewer=%s channel_id=%s chatroom_id=%s ua=%s",
             self.viewer_id,
             self.channel_id,
             self.chatroom_id,
+            self.user_agent,
         )
 
     async def get_viewer_token(self, session: aiohttp.ClientSession) -> str:
@@ -46,7 +53,7 @@ class KickViewer:
             raise RuntimeError("chat_token is required to get viewer token")
 
         url = "https://websockets.kick.com/viewer/v1/token"
-        headers = {"X-CLIENT-TOKEN": client_token}
+        headers = {"X-CLIENT-TOKEN": client_token, "User-Agent": self.user_agent}
         backoff = 1
         for _ in range(5):
             try:
@@ -110,6 +117,7 @@ class KickViewer:
             max_queue=1,
             compression=None,
             close_timeout=3,
+            additional_headers={"User-Agent": self.user_agent},
         ) as ws:
             self._ws = ws
             if self._on_ws_connection_change:
@@ -135,7 +143,11 @@ class KickViewer:
 
     async def _connect_chat_loop(self, chatroom_id: str) -> None:
         uri = "wss://ws-us2.pusher.com/app/32cbd69e4b950bf97679"
-        async with websockets.connect(uri, ping_interval=None) as ws:
+        async with websockets.connect(
+            uri,
+            ping_interval=None,
+            additional_headers={"User-Agent": self.user_agent},
+        ) as ws:
             await ws.send(
                 json.dumps(
                     {

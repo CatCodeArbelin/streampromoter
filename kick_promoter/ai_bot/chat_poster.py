@@ -70,6 +70,19 @@ class ChatPoster:
             ]
         self._telemetry_callback = telemetry_callback
         self._validator = validator or ChatPostValidator()
+        self._skip_probability = float(self.config.get("chat_idle_skip_probability", 0.1))
+        self._interval_mean_sec = float(self.config.get("chat_interval_mean_sec", self.config.get("post_interval_sec", 30)))
+        self._interval_std_sec = float(self.config.get("chat_interval_std_sec", 8))
+        self._chat_jitter_max = float(self.config.get("chat_jitter_max", 0))
+
+    def should_skip_cycle(self) -> bool:
+        probability = min(max(self._skip_probability, 0.0), 1.0)
+        return random.random() < probability
+
+    def compute_next_delay(self, *, min_delay: float) -> float:
+        base_delay = max(min_delay, random.gauss(self._interval_mean_sec, self._interval_std_sec))
+        jitter = random.uniform(0, self._chat_jitter_max) if self._chat_jitter_max > 0 else 0.0
+        return base_delay + jitter
 
     async def post(self, text: str) -> None:
         chatroom_id = self.config.get("kick_chatroom_id")
@@ -122,5 +135,12 @@ class ChatPoster:
 
     async def fallback_loop(self) -> None:
         while True:
+            if self.should_skip_cycle():
+                logger.debug("component=chat_poster event=skip_cycle reason=bernoulli probability=%.3f", self._skip_probability)
+                await asyncio.sleep(self.compute_next_delay(min_delay=1.0))
+                continue
+
             await self.post(random.choice(self.phrases))
-            await asyncio.sleep(int(self.config.get("post_interval_sec", 30)))
+            delay = self.compute_next_delay(min_delay=float(self.config.get("post_interval_sec", 30)))
+            logger.debug("component=chat_poster event=post_delay delay_sec=%.3f", delay)
+            await asyncio.sleep(delay)
