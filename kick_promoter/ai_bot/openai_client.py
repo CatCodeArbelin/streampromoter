@@ -136,10 +136,16 @@ class OpenAIClient:
             if text is None:
                 break
 
-            now = time.time()
-            remaining = self._throttle - (now - self._last_published_at)
-            if remaining > 0:
-                await asyncio.sleep(remaining)
+            if self.chat_poster.should_skip_cycle():
+                logger.info(
+                    "component=openai_client event=skip_post_cycle reason=bernoulli viewer_channel=%s",
+                    self.config.get("kick_channel", ""),
+                )
+                continue
+
+            delay = self.chat_poster.compute_next_delay(min_delay=float(self._throttle))
+            logger.debug("component=openai_client event=pre_post_delay delay_sec=%.3f", delay)
+            await asyncio.sleep(delay)
 
             try:
                 await self.chat_poster.post(text)
