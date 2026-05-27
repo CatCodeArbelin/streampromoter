@@ -3,3 +3,4 @@ websockets==13.1
 Flask==3.1.0
 waitress==3.0.2
 streamlink==7.0.0
+curl_cffi==0.7.4
