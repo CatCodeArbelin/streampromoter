@@ -5,6 +5,13 @@ services:
       - "5000"
     environment:
       NODE_ID: ${NODE_ID:-}
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 512M
+    cpus: '2'
+    mem_limit: 512m
     volumes:
       - ./kick_promoter/config.json:/app/kick_promoter/config.json:ro
       - ./kick_promoter/phrases.txt:/app/kick_promoter/phrases.txt:ro

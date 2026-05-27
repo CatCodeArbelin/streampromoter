@@ -87,6 +87,15 @@ docker-compose up --build
 docker compose up --build
 ```
 
+### Baseline-профиль нагрузки для одиночной ноды (QA)
+
+Для сервиса `viewer-node` в `docker-compose.yml` зафиксирован базовый ресурсный профиль:
+
+- swarm-формат: `deploy.resources.limits.cpus: "2"`, `deploy.resources.limits.memory: 512M`;
+- non-swarm совместимость (docker compose): `cpus: "2"`, `mem_limit: 512m`.
+
+Этот профиль рекомендуется как стартовый baseline для одиночной QA-ноды перед дальнейшим тюнингом `viewer_count` и интервалов отправки сообщений.
+
 ## 4) Конфигурация: `config.json`
 
 Пример:
