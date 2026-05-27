@@ -31,16 +31,20 @@ class ChatPostValidator:
             return False, f"message too long len={len(text_value)} limit={self.max_text_length}"
 
         if not chatroom_value:
-            return False, "missing kick_chatroom_id"
+            logger.warning("Chat posting disabled: missing kick_chatroom_id")
+            return True, None
 
         if not chatroom_value.isdigit():
-            return False, f"invalid kick_chatroom_id format={chatroom_value!r}"
+            logger.warning("Chat posting disabled: invalid kick_chatroom_id format=%r", chatroom_value)
+            return True, None
 
         if not token_value:
-            return False, "missing chat_token"
+            logger.warning("Chat posting disabled: missing chat_token")
+            return True, None
 
         if len(token_value) < self.min_token_length:
-            return False, f"chat_token too short len={len(token_value)} min={self.min_token_length}"
+            logger.warning("Chat posting disabled: chat_token too short len=%s min=%s", len(token_value), self.min_token_length)
+            return True, None
 
         return True, None
 

@@ -80,8 +80,8 @@ class ViewerPool:
                 backoff = min(backoff * 2, 30)
         raise RuntimeError("cannot resolve chatroom id")
 
-    async def get_channel_ids(self) -> tuple[str, str]:
-        if self._channel_id and self._chatroom_id:
+    async def get_channel_ids(self) -> tuple[str, str | None]:
+        if self._channel_id:
             return self._channel_id, self._chatroom_id
 
         channel = str(self.config.get("kick_channel", "")).strip()
@@ -95,7 +95,7 @@ class ViewerPool:
         if not channel_id:
             raise RuntimeError("empty channel id")
         if not chatroom_id:
-            raise RuntimeError("empty chatroom id")
+            logger.warning("component=viewer_pool event=chatroom_id_missing channel=%s", channel)
 
         self._channel_id = channel_id
         self._chatroom_id = chatroom_id
