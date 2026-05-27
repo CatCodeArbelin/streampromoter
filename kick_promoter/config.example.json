@@ -1,0 +1,13 @@
+{
+  "x_client_token": "YOUR_X_CLIENT_TOKEN",
+  "chat_token": "YOUR_KICK_CHAT_TOKEN",
+  "openai_api_key": "YOUR_OPENAI_API_KEY",
+  "chat_jitter_max": 2,
+  "chat_idle_skip_probability": 0.1,
+  "chat_interval_mean_sec": 30,
+  "chat_interval_std_sec": 8,
+  "user_agents": [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36"
+  ],
+  "ramp_up_seconds": 0
+}

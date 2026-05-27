@@ -1,6 +1,7 @@
 {
   "kick_channel": "example_channel",
   "kick_chatroom_id": "",
+  "x_client_token": "YOUR_X_CLIENT_TOKEN",
   "chat_token": "YOUR_KICK_CHAT_TOKEN",
   "viewer_count": 5,
   "viewer_ping_interval_sec": 20,
