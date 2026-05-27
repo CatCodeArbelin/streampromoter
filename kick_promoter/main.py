@@ -159,50 +159,59 @@ class Runner:
             backoff_sec = min(backoff_sec * 2, max_backoff_sec)
 
     async def start(self) -> None:
-        if self._status == "running":
-            logger.info("component=runner event=start_skip reason=already_running")
-            return
-        if self._status == "stopping" or self._stop_event.is_set():
-            logger.info("component=runner event=start_skip reason=stopping")
-            return
-        if self._started:
-            logger.info("component=runner event=start_skip reason=already_started")
-            return
+        try:
+            if self._status == "running":
+                logger.info("component=runner event=start_skip reason=already_running")
+                return
+            if self._status == "stopping" or self._stop_event.is_set():
+                logger.info("component=runner event=start_skip reason=stopping")
+                return
+            if self._started:
+                logger.info("component=runner event=start_skip reason=already_started")
+                return
 
-        self._started = True
-        self._status = "running"
-        timeout_sec = int(self.config.get("post_timeout_sec", 10))
-        self._session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=timeout_sec))
-        poster = ChatPoster(self.config, session=self._session, telemetry_callback=self._telemetry_callback)
-        self._viewer_pool = ViewerPool(self.config, telemetry_callback=self._telemetry_callback)
-        self._openai_client = OpenAIClient(config=self.config, chat_poster=poster)
+            self._started = True
+            self._status = "running"
+            self._session = aiohttp.ClientSession(
+                timeout=aiohttp.ClientTimeout(total=10, connect=5, sock_read=5)
+            )
+            poster = ChatPoster(self.config, session=self._session, telemetry_callback=self._telemetry_callback)
+            self._viewer_pool = ViewerPool(self.config, telemetry_callback=self._telemetry_callback)
+            self._openai_client = OpenAIClient(config=self.config, chat_poster=poster)
 
-        logger.info("component=runner event=start")
-        logger.info("component=runner event=assert_channel_live")
-        await self._assert_channel_live()
-        logger.info("component=token_validator event=validate_start")
-        await validate_x_client_token(self.config, self._session)
-        logger.info("component=viewer_pool event=start")
-        await self._viewer_pool.start()
+            logger.info("component=runner event=start")
+            logger.info(
+                "component=runner event=checking_channel_live channel=%s",
+                self.config.get("kick_channel"),
+            )
+            logger.info("component=runner event=assert_channel_live")
+            await self._assert_channel_live()
+            logger.info("component=token_validator event=validate_start")
+            await validate_x_client_token(self.config, self._session)
+            logger.info("component=viewer_pool event=start")
+            await self._viewer_pool.start()
 
-        logger.info("component=openai_client event=start")
-        self._openai_task = asyncio.create_task(self._run_openai_with_restarts(), name="openai-watchdog")
+            logger.info("component=openai_client event=start")
+            self._openai_task = asyncio.create_task(self._run_openai_with_restarts(), name="openai-watchdog")
 
-        waiter = asyncio.create_task(self._stop_event.wait(), name="runner-stop-waiter")
-        viewer_wait = asyncio.create_task(self._viewer_pool.wait(), name="viewer-pool-wait")
-        done, pending = await asyncio.wait({waiter, viewer_wait}, return_when=asyncio.FIRST_COMPLETED)
+            waiter = asyncio.create_task(self._stop_event.wait(), name="runner-stop-waiter")
+            viewer_wait = asyncio.create_task(self._viewer_pool.wait(), name="viewer-pool-wait")
+            done, pending = await asyncio.wait({waiter, viewer_wait}, return_when=asyncio.FIRST_COMPLETED)
 
-        if waiter in done:
-            logger.info("component=runner event=stop_event_received")
-        elif viewer_wait in done:
-            logger.warning("component=viewer_pool event=completed_or_failed")
+            if waiter in done:
+                logger.info("component=runner event=stop_event_received")
+            elif viewer_wait in done:
+                logger.warning("component=viewer_pool event=completed_or_failed")
 
-        for task in pending:
-            task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await task
+            for task in pending:
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
 
-        await self.stop()
+            await self.stop()
+        except Exception:
+            logger.exception("Runner start failed")
+            raise
 
     async def stop(self) -> None:
         if self._status == "stopped":

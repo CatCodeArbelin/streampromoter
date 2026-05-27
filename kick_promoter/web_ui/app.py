@@ -10,6 +10,7 @@ from waitress import serve as waitress_serve
 from kick_promoter.main import Runner, load_config
 
 app = Flask(__name__)
+logger = logging.getLogger(__name__)
 STOP_JOIN_TIMEOUT_SEC = 10
 
 
@@ -189,13 +190,18 @@ def start():
         state.set_lifecycle(task=task)
         try:
             loop.run_until_complete(task)
-            if state.get_status_snapshot()["status"] != "error":
+            task_exc = task.exception() if task.done() and not task.cancelled() else None
+            if task_exc is not None:
+                err_text = str(task_exc) or task_exc.__class__.__name__
+                state.set_lifecycle(status="error", error=err_text)
+                publish_event("lifecycle", phase="error", progress=100, status=state.get_status_snapshot()["status"], message=err_text)
+            elif state.get_status_snapshot()["status"] != "error":
                 state.set_lifecycle(status="stopped")
                 publish_event("lifecycle", phase="stop", progress=100, status=state.get_status_snapshot()["status"], message="Stopped")
         except Exception as exc:
             state.set_lifecycle(status="error", error=str(exc))
             publish_event("lifecycle", phase="error", progress=100, status=state.get_status_snapshot()["status"], message=str(exc))
-            logging.exception("Runner failed")
+            logger.exception("Runner failed with traceback")
         finally:
             state.set_lifecycle(running=False)
 
