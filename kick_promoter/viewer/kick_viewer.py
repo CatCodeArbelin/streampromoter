@@ -57,6 +57,7 @@ class KickViewer:
         backoff = 1
         for _ in range(5):
             try:
+                logger.info("viewer=%s requesting viewer token", self.viewer_id)
                 async with session.get(url, headers=headers, timeout=10) as response:
                     response.raise_for_status()
                     payload = await response.json()
@@ -82,6 +83,7 @@ class KickViewer:
             while self._running:
                 try:
                     viewer_token = await self.get_viewer_token(session)
+                    logger.info("viewer=%s connecting to WS", self.viewer_id)
                     await self._connect_viewer_loop(self.channel_id, viewer_token)
                     reconnect_attempt = 0
                     reconnect_delay = self._reconnect_base_delay
