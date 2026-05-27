@@ -7,6 +7,7 @@ import socket
 from pathlib import Path
 
 import aiohttp
+from curl_cffi import requests
 
 from kick_promoter.ai_bot.chat_poster import ChatPoster
 from kick_promoter.ai_bot.openai_client import OpenAIClient
@@ -118,15 +119,19 @@ class Runner:
         if not channel:
             raise RuntimeError("kick_channel is required")
 
-        assert self._session is not None
         url = f"https://kick.com/api/v2/channels/{channel}"
-        async with self._session.get(url) as response:
-            if response.status != 200:
-                raise RuntimeError("Channel is not live. Load test aborted.")
-            payload = await response.json(content_type=None)
 
-        livestream = payload.get("livestream") if isinstance(payload, dict) else None
-        if not livestream:
+        def _fetch_channel_data() -> dict:
+            session = requests.Session()
+            response = session.get(url, impersonate="chrome110")
+            if response.status_code != 200:
+                raise RuntimeError("Channel is not live. Load test aborted.")
+            data = response.json()
+            return data if isinstance(data, dict) else {}
+
+        payload = await asyncio.to_thread(_fetch_channel_data)
+
+        if payload.get("is_live") is not True:
             raise RuntimeError("Channel is not live. Load test aborted.")
 
     async def _run_openai_with_restarts(self) -> None:
