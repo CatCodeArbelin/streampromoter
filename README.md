@@ -199,6 +199,17 @@ cp kick_promoter/config.example.json kick_promoter/config.json
 
 То есть значения из переменных окружения (например, `CHAT_TOKEN`, `OPENAI_API_KEY`) всегда перекрывают файлы, а `secrets.json` перекрывает базовый `config.json`.
 
+
+### Чеклист smoke-проверки после настройки секретов
+
+После того как вы заполнили `kick_promoter/secrets.json` или переменные окружения, выполните короткий smoke-check:
+
+- [ ] Активировано чистое окружение (`python -m venv .venv-smoke && source .venv-smoke/bin/activate`).
+- [ ] Установлены зависимости (`pip install -r requirements.txt`) без ошибок resolver/pip.
+- [ ] Приложение стартует командой `python -m kick_promoter.web_ui.app` без traceback в логах.
+- [ ] Endpoint `http://127.0.0.1:5000/status` отвечает (например, `curl -fsS http://127.0.0.1:5000/status`).
+- [ ] Процесс корректно завершается по `Ctrl+C` без зависания.
+
 ## 5.1 Режимы запуска: dev и prod
 
 ### Dev (встроенный Flask server)
