@@ -8,9 +8,55 @@ import aiohttp
 
 logger = logging.getLogger(__name__)
 
+MAX_CHAT_MESSAGE_LENGTH = 500
+MIN_CHAT_TOKEN_LENGTH = 10
+
+
+class ChatPostValidator:
+    """Validation layer extracted for unit-level testing and extension."""
+
+    def __init__(self, max_text_length: int = MAX_CHAT_MESSAGE_LENGTH, min_token_length: int = MIN_CHAT_TOKEN_LENGTH):
+        self.max_text_length = max_text_length
+        self.min_token_length = min_token_length
+
+    def validate(self, *, text: str, chatroom_id: str | None, token: str | None) -> tuple[bool, str | None]:
+        text_value = text if isinstance(text, str) else ""
+        chatroom_value = self._sanitize_string(chatroom_id)
+        token_value = self._sanitize_string(token)
+
+        if not text_value:
+            return False, "empty message text"
+
+        if len(text_value) > self.max_text_length:
+            return False, f"message too long len={len(text_value)} limit={self.max_text_length}"
+
+        if not chatroom_value:
+            return False, "missing kick_chatroom_id"
+
+        if not chatroom_value.isdigit():
+            return False, f"invalid kick_chatroom_id format={chatroom_value!r}"
+
+        if not token_value:
+            return False, "missing chat_token"
+
+        if len(token_value) < self.min_token_length:
+            return False, f"chat_token too short len={len(token_value)} min={self.min_token_length}"
+
+        return True, None
+
+    @staticmethod
+    def _sanitize_string(value: str | None) -> str:
+        return value.strip() if isinstance(value, str) else ""
+
 
 class ChatPoster:
-    def __init__(self, config: dict, session: aiohttp.ClientSession, telemetry_callback: Callable[..., None] | None = None):
+    def __init__(
+        self,
+        config: dict,
+        session: aiohttp.ClientSession,
+        telemetry_callback: Callable[..., None] | None = None,
+        validator: ChatPostValidator | None = None,
+    ):
         self.config = config
         self.session = session
         runtime_phrases = config.get("runtime_phrases") or []
@@ -23,16 +69,19 @@ class ChatPoster:
                 if phrase.strip()
             ]
         self._telemetry_callback = telemetry_callback
+        self._validator = validator or ChatPostValidator()
 
     async def post(self, text: str) -> None:
         chatroom_id = self.config.get("kick_chatroom_id")
         token = self.config.get("chat_token", "")
-        if not chatroom_id or not token:
-            logger.warning("Skip post: missing chatroom_id or chat_token")
+
+        is_valid, reason = self._validator.validate(text=text, chatroom_id=chatroom_id, token=token)
+        if not is_valid:
+            logger.warning("Skip post: invalid payload reason=%s", reason)
             return
 
-        url = f"https://kick.com/api/v2/messages/send/{chatroom_id}"
-        headers = {"Authorization": f"Bearer {token}"}
+        url = f"https://kick.com/api/v2/messages/send/{str(chatroom_id).strip()}"
+        headers = {"Authorization": f"Bearer {str(token).strip()}"}
 
         max_retries = int(self.config.get("post_max_retries", 5))
         timeout_sec = int(self.config.get("post_timeout_sec", 10))
