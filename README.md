@@ -73,6 +73,14 @@ python -m kick_promoter.web_ui.app
 ```
 
 Ожидаемый результат: в консоли появляется `Serving Flask app`, UI доступен по `http://127.0.0.1:5000`.
+
+Дополнительно проверьте health endpoint в отдельном терминале:
+
+```bash
+curl -fsS http://127.0.0.1:5000/status
+```
+
+Ожидается JSON-ответ без traceback в логах процесса.
 Для остановки используйте `Ctrl+C`.
 
 ### Запуск через Docker Compose
@@ -180,6 +188,34 @@ python -m kick_promoter.web_ui.app
    `config.json` < `secrets.json` < переменные окружения.
 
 Для CI/CD и временных нагрузочных прогонов рекомендуется задавать секреты через env-переменные (`CHAT_TOKEN`, `OPENAI_API_KEY`) — они перекрывают значения из файлов.
+
+## 5.1 Режимы запуска: dev и prod
+
+### Dev (встроенный Flask server)
+Подходит для локальной отладки. Включается параметром `web_use_dev_server=true` в `kick_promoter/config.json`:
+
+```json
+{
+  "web_use_dev_server": true
+}
+```
+
+Запуск:
+
+```bash
+python -m kick_promoter.web_ui.app
+```
+
+### Prod (Waitress WSGI server)
+Рекомендуется для стабильного запуска в окружениях, близких к production. По умолчанию используется `waitress` при `web_use_dev_server=false` (или если ключ отсутствует).
+
+Запуск:
+
+```bash
+python -m kick_promoter.web_ui.app
+```
+
+Сетевые настройки берутся из `WEB_HOST` и `WEB_PORT` (или из `config.json`, если env не заданы).
 
 ## 6) Включение / выключение OpenAI-режима
 
