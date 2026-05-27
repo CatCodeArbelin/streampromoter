@@ -112,12 +112,13 @@ docker compose up --build
 {
   "kick_channel": "example_channel",
   "kick_chatroom_id": "",
-  "chat_token": "",
+  "x_client_token": "YOUR_X_CLIENT_TOKEN",
+  "chat_token": "YOUR_KICK_CHAT_TOKEN",
   "viewer_count": 5,
   "viewer_ping_interval_sec": 20,
   "chat_ping_interval_sec": 20,
   "openai_enabled": false,
-  "openai_api_key": "",
+  "openai_api_key": "YOUR_OPENAI_API_KEY",
   "openai_model": "gpt-realtime",
   "openai_voice": "alloy",
   "openai_throttle_sec": 15,
@@ -163,31 +164,40 @@ docker compose up --build
 ```bash
 export KICK_CHANNEL=my_channel
 export KICK_CHATROOM_ID=123456
-export CHAT_TOKEN='your_kick_token'
+export CHAT_TOKEN='YOUR_KICK_CHAT_TOKEN'
 export OPENAI_ENABLED=true
-export OPENAI_API_KEY='sk-...'
+export OPENAI_API_KEY='YOUR_OPENAI_API_KEY'
 python -m kick_promoter.web_ui.app
 ```
 
 
 ### Безопасное хранение секретов для нагрузочных прогонов
 
-1. В `kick_promoter/config.json` оставляйте только плейсхолдеры:
+1. Скопируйте шаблон конфигурации в рабочий файл:
+
+```bash
+cp kick_promoter/config.example.json kick_promoter/config.json
+```
+
+2. В `kick_promoter/config.json` оставляйте только плейсхолдеры:
+   - `YOUR_X_CLIENT_TOKEN`
    - `YOUR_KICK_CHAT_TOKEN`
    - `YOUR_OPENAI_API_KEY`
-2. Реальные секреты храните в `kick_promoter/secrets.json` (файл добавлен в `.gitignore` и не должен коммититься):
+
+3. Реальные секреты храните в `.env` (предпочтительно для CI/CD) или в `kick_promoter/secrets.json` (файл в `.gitignore`):
 
 ```json
 {
+  "x_client_token": "your-real-x-client-token",
   "chat_token": "your-real-kick-chat-token",
-  "openai_api_key": "sk-..."
+  "openai_api_key": "YOUR_OPENAI_API_KEY"
 }
 ```
 
-3. Приоритет источников конфигурации:
-   `config.json` < `secrets.json` < переменные окружения.
+4. Приоритет источников конфигурации:
+   `env > secrets.json > config.json`.
 
-Для CI/CD и временных нагрузочных прогонов рекомендуется задавать секреты через env-переменные (`CHAT_TOKEN`, `OPENAI_API_KEY`) — они перекрывают значения из файлов.
+То есть значения из переменных окружения (например, `CHAT_TOKEN`, `OPENAI_API_KEY`) всегда перекрывают файлы, а `secrets.json` перекрывает базовый `config.json`.
 
 ## 5.1 Режимы запуска: dev и prod
 
