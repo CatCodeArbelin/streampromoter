@@ -7,10 +7,10 @@ import socket
 from pathlib import Path
 
 import aiohttp
-from curl_cffi import requests
 
 from kick_promoter.ai_bot.chat_poster import ChatPoster
 from kick_promoter.ai_bot.openai_client import OpenAIClient
+from kick_promoter.kick_http_client import KickHttpClient
 from kick_promoter.token_validator import validate_x_client_token
 from kick_promoter.viewer.viewer_pool import ViewerPool
 
@@ -104,6 +104,7 @@ class Runner:
         self._openai_client = None
         self._openai_task = None
         self._telemetry_callback = telemetry_callback
+        self._kick_http_client = KickHttpClient(config)
         self._viewer_pool_stop_timeout_sec = float(self.config.get("viewer_pool_stop_timeout_sec", 15))
         self._openai_stop_timeout_sec = float(self.config.get("openai_stop_timeout_sec", 10))
 
@@ -121,15 +122,13 @@ class Runner:
 
         url = f"https://kick.com/api/v2/channels/{channel}"
 
-        def _fetch_channel_data() -> dict:
-            session = requests.Session()
-            response = session.get(url, impersonate="chrome110")
-            if response.status_code != 200:
-                raise RuntimeError("Channel is not live. Load test aborted.")
-            data = response.json()
-            return data if isinstance(data, dict) else {}
+        try:
+            payload = await self._kick_http_client.get_json(url)
+        except Exception as exc:
+            raise RuntimeError("Channel is not live. Load test aborted.") from exc
 
-        payload = await asyncio.to_thread(_fetch_channel_data)
+        if not isinstance(payload, dict):
+            payload = {}
 
         livestream = payload.get("livestream") or {}
         if livestream.get("is_live") is not True:
@@ -187,7 +186,7 @@ class Runner:
             logger.info("component=runner event=assert_channel_live")
             await self._assert_channel_live()
             logger.info("component=token_validator event=validate_start")
-            await validate_x_client_token(self.config, self._session)
+            await validate_x_client_token(self.config, self._kick_http_client)
             logger.info("component=viewer_pool event=start")
             await self._viewer_pool.start()
 
