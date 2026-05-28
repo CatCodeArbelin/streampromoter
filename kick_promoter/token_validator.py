@@ -3,7 +3,7 @@ import logging
 import re
 from urllib.parse import urljoin
 
-import aiohttp
+from kick_promoter.kick_http_client import KickHttpClient
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +21,7 @@ class TokenExpiredError(RuntimeError):
     """Raised when Kick static x-client-token differs from configured one."""
 
 
-async def validate_x_client_token(config: dict, session: aiohttp.ClientSession) -> bool:
+async def validate_x_client_token(config: dict, kick_http_client: KickHttpClient) -> bool:
     """Validate configured static Kick x-client-token against token candidate in Kick JS bundles.
 
     Steps:
@@ -35,14 +35,14 @@ async def validate_x_client_token(config: dict, session: aiohttp.ClientSession) 
 
     Args:
         config: Runtime configuration dictionary with expected token in `x_client_token`.
-        session: Existing aiohttp client session used for HTTP requests.
+        kick_http_client: Kick HTTP client used for Kick-friendly GET requests.
 
     Returns:
         bool: True if validation succeeds.
 
     Raises:
         RuntimeError: When `x_client_token` is missing in config.
-        aiohttp.ClientResponseError: If kick.com homepage request fails.
+        Exception: If kick.com homepage request fails.
         TokenExpiredError: If discovered static token does not match configured one.
     """
     expected_token: str = str(config.get("x_client_token", "")).strip()
@@ -52,9 +52,7 @@ async def validate_x_client_token(config: dict, session: aiohttp.ClientSession) 
     base_url: str = "https://kick.com"
 
     # 1) Load homepage HTML.
-    async with session.get(base_url) as response:
-        response.raise_for_status()
-        html: str = await response.text()
+    html: str = await kick_http_client.get_text(base_url)
 
     # 2) Extract and normalize JS script URLs.
     script_urls: list[str] = []
@@ -81,15 +79,8 @@ async def validate_x_client_token(config: dict, session: aiohttp.ClientSession) 
     # 3) Scan candidate scripts for first 64-hex token.
     for js_url in candidates:
         try:
-            async with session.get(js_url) as js_response:
-                if js_response.status != 200:
-                    logger.debug(
-                        "component=token_validator event=skip_script_non_200 payload=%s",
-                        json.dumps({"url": js_url, "status": js_response.status}),
-                    )
-                    continue
-                js_body: str = await js_response.text()
-        except aiohttp.ClientError as exc:
+            js_body: str = await kick_http_client.get_text(js_url)
+        except Exception as exc:
             logger.debug(
                 "component=token_validator event=skip_script_error payload=%s",
                 json.dumps({"url": js_url, "error": str(exc)}),
