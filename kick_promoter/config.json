@@ -29,6 +29,7 @@
   "reconnect_base_delay": 1,
   "openai_enabled": false,
   "openai_api_key": "YOUR_OPENAI_API_KEY",
+  "google_api_key": "YOUR_GOOGLE_API_KEY",
   "openai_model": "gpt-realtime",
   "openai_voice": "alloy",
   "openai_throttle_sec": 15,
