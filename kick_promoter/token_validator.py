@@ -21,7 +21,7 @@ class TokenExpiredError(RuntimeError):
     """Raised when Kick static x-client-token differs from configured one."""
 
 
-async def validate_x_client_token(config: dict, kick_http_client: KickHttpClient) -> bool:
+async def validate_x_client_token(config: dict, kick_http_client: KickHttpClient) -> str | None:
     """Validate configured static Kick x-client-token against token candidate in Kick JS bundles.
 
     Steps:
@@ -31,14 +31,14 @@ async def validate_x_client_token(config: dict, kick_http_client: KickHttpClient
     4) Download up to first 5 JS files.
     5) Search each JS body for a 64-char hex candidate token.
     6) Raise TokenExpiredError if discovered token mismatches configured token.
-    7) Log success and return True when token matches.
+    7) Log success and return expected token when token matches.
 
     Args:
         config: Runtime configuration dictionary with expected token in `x_client_token`.
         kick_http_client: Kick HTTP client used for Kick-friendly GET requests.
 
     Returns:
-        bool: True if validation succeeds.
+        str | None: Expected token if validation succeeds, or None when no candidate was found.
 
     Raises:
         RuntimeError: When `x_client_token` is missing in config.
@@ -92,9 +92,13 @@ async def validate_x_client_token(config: dict, kick_http_client: KickHttpClient
             discovered_token = token_match.group("token")
             break
 
-    # If no candidate token is found, treat it as a hard validation failure.
+    # If no candidate token is found, warn and defer hard validation failure.
     if not discovered_token:
-        raise RuntimeError("Could not find a 64-char static token candidate in Kick JS bundles")
+        logger.warning(
+            "component=token_validator event=no_token_candidate_found payload=%s",
+            json.dumps({"scripts_found": len(script_urls), "scripts_checked": len(candidates)}),
+        )
+        return None
 
     # 4) Compare discovered token with configured token (case-insensitive for hex).
     if discovered_token.lower() != expected_token.lower():
@@ -107,4 +111,4 @@ async def validate_x_client_token(config: dict, kick_http_client: KickHttpClient
         "component=token_validator event=validation_passed payload=%s",
         json.dumps({"scripts_found": len(script_urls), "scripts_checked": len(candidates)}),
     )
-    return True
+    return expected_token
