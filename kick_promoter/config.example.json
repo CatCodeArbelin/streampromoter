@@ -2,6 +2,7 @@
   "x_client_token": "YOUR_X_CLIENT_TOKEN",
   "chat_token": "YOUR_KICK_CHAT_TOKEN",
   "openai_api_key": "YOUR_OPENAI_API_KEY",
+  "google_api_key": "YOUR_GOOGLE_GEMINI_API_KEY",
   "chat_jitter_max": 2,
   "chat_idle_skip_probability": 0.1,
   "chat_interval_mean_sec": 30,
