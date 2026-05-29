@@ -3,7 +3,7 @@ import logging
 import random
 from collections.abc import Callable
 
-import aiohttp
+from curl_cffi import requests
 
 from kick_promoter.viewer.kick_viewer import KickViewer
 
@@ -36,7 +36,7 @@ class ViewerPool:
         self._active_ws_connections = max(0, self._active_ws_connections + delta)
         self._emit_telemetry()
 
-    async def _resolve_channel_id(self, session: aiohttp.ClientSession) -> str:
+    async def _resolve_channel_id(self) -> str:
         channel = str(self.config.get("kick_channel", "")).strip()
         if not channel:
             raise RuntimeError("kick_channel is required")
@@ -45,20 +45,42 @@ class ViewerPool:
         backoff = 1
         for _ in range(5):
             try:
-                async with session.get(url, timeout=10) as response:
-                    response.raise_for_status()
-                    payload = await response.json()
-                    channel_id = str(payload.get("id", "")).strip()
-                    if channel_id:
-                        return channel_id
-                    raise RuntimeError("empty channel id")
+                def _sync_req() -> str:
+                    session = requests.Session()
+                    try:
+                        headers = {
+                            "User-Agent": self.config["user_agents"][0],
+                            "Accept": "application/json",
+                            "Accept-Language": "en-US,en;q=0.9",
+                            "Origin": "https://kick.com",
+                            "Referer": "https://kick.com/",
+                        }
+                        session_token = str(self.config.get("session_token", "")).strip()
+                        if session_token:
+                            headers["Authorization"] = f"Bearer {session_token}"
+                        viewer_token = str(self.config.get("viewer_token", "")).strip()
+                        if viewer_token:
+                            headers["x-client-token"] = viewer_token
+
+                        resp = session.get(url, headers=headers, impersonate="chrome124")
+                        if resp.status_code != 200:
+                            raise RuntimeError(f"unexpected channel status: {resp.status_code}")
+                        channel_id = str(resp.json().get("id", "")).strip()
+                        if channel_id:
+                            return channel_id
+                        raise RuntimeError("empty channel id")
+                    finally:
+                        session.close()
+
+                channel_id = await asyncio.to_thread(_sync_req)
+                return channel_id
             except Exception as exc:
                 logger.warning("component=viewer_pool event=resolve_channel_id_failed error=%s", exc)
                 await asyncio.sleep(backoff)
                 backoff = min(backoff * 2, 30)
         raise RuntimeError("cannot resolve channel id")
 
-    async def _resolve_chatroom_id(self, session: aiohttp.ClientSession, channel: str) -> str:
+    async def _resolve_chatroom_id(self, channel: str) -> str:
         configured_chatroom_id = str(self.config.get("kick_chatroom_id", "")).strip()
         if configured_chatroom_id:
             return configured_chatroom_id
@@ -67,13 +89,36 @@ class ViewerPool:
         backoff = 1
         for _ in range(5):
             try:
-                async with session.get(url, timeout=10) as response:
-                    response.raise_for_status()
-                    payload = await response.json()
-                    chatroom_id = str(payload.get("id", "")).strip()
-                    if chatroom_id:
-                        return chatroom_id
-                    raise RuntimeError("empty chatroom id")
+                def _sync_req() -> str:
+                    session = requests.Session()
+                    try:
+                        headers = {
+                            "User-Agent": self.config["user_agents"][0],
+                            "Accept": "application/json",
+                            "Accept-Language": "en-US,en;q=0.9",
+                            "Origin": "https://kick.com",
+                            "Referer": "https://kick.com/",
+                        }
+                        session_token = str(self.config.get("session_token", "")).strip()
+                        if session_token:
+                            headers["Authorization"] = f"Bearer {session_token}"
+                        viewer_token = str(self.config.get("viewer_token", "")).strip()
+                        if viewer_token:
+                            headers["x-client-token"] = viewer_token
+
+                        resp = session.get(url, headers=headers, impersonate="chrome124")
+                        if resp.status_code != 200:
+                            raise RuntimeError(f"unexpected chatroom status: {resp.status_code}")
+                        payload = resp.json()
+                        chatroom_id = str(payload.get("id", "")).strip()
+                        if chatroom_id:
+                            return chatroom_id
+                        raise RuntimeError("empty chatroom id")
+                    finally:
+                        session.close()
+
+                chatroom_id = await asyncio.to_thread(_sync_req)
+                return chatroom_id
             except Exception as exc:
                 logger.warning("component=viewer_pool event=resolve_chatroom_id_failed error=%s", exc)
                 await asyncio.sleep(backoff)
@@ -88,9 +133,8 @@ class ViewerPool:
         if not channel:
             raise RuntimeError("kick_channel is required")
 
-        async with aiohttp.ClientSession() as session:
-            channel_id = await self._resolve_channel_id(session)
-            chatroom_id = await self._resolve_chatroom_id(session, channel)
+        channel_id = await self._resolve_channel_id()
+        chatroom_id = await self._resolve_chatroom_id(channel)
 
         if not channel_id:
             raise RuntimeError("empty channel id")
