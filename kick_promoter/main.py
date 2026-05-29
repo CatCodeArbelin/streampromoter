@@ -187,7 +187,9 @@ class Runner:
             logger.info("component=runner event=assert_channel_live")
             await self._assert_channel_live()
             logger.info("component=token_validator event=validate_start")
-            await validate_x_client_token(self.config, self._kick_http_client)
+            validated_token = await validate_x_client_token(self.config, self._kick_http_client)
+            if validated_token is None:
+                logger.warning("Could not auto-detect viewer token, using value from config")
             logger.info("component=viewer_pool event=start")
             await self._viewer_pool.start()
 
