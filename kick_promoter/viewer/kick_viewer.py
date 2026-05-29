@@ -7,6 +7,7 @@ from collections.abc import Callable
 from typing import Optional
 
 import aiohttp
+from curl_cffi import requests as curl_requests
 import websockets
 
 logger = logging.getLogger(__name__)
@@ -48,28 +49,61 @@ class KickViewer:
         )
 
     async def get_viewer_token(self, session: aiohttp.ClientSession) -> str:
+        session_token = str(self.config.get("session_token", "")).strip()
+        if not session_token:
+            raise RuntimeError("session_token is required to get viewer token")
+
         client_token = self.config.get("viewer_token", "") or self.config.get("chat_token", "")
         if not client_token:
             raise RuntimeError("viewer_token is required to get viewer token")
 
+        user_agents = self.config.get("user_agents")
+        request_user_agent = (
+            str(user_agents[0])
+            if isinstance(user_agents, list) and user_agents
+            else self.user_agent or DEFAULT_USER_AGENT
+        )
         url = "https://websockets.kick.com/viewer/v1/token"
-        headers = {"X-CLIENT-TOKEN": client_token, "User-Agent": self.user_agent}
+        headers = {
+            "Authorization": f"Bearer {session_token}",
+            "x-client-token": client_token,
+            "x-app-platform": "web",
+            "origin": "https://kick.com",
+            "referer": "https://kick.com/",
+            "User-Agent": request_user_agent,
+        }
         backoff = 1
         for _ in range(5):
             try:
                 logger.info("viewer=%s requesting viewer token", self.viewer_id)
-                async with session.get(url, headers=headers, timeout=10) as response:
-                    response.raise_for_status()
-                    payload = await response.json()
-                    viewer_token = str(payload.get("token", ""))
-                    if viewer_token:
-                        return viewer_token
-                    raise RuntimeError("empty viewer token")
+                payload = await asyncio.to_thread(self._get_viewer_token_payload, url, headers)
+                viewer_token = str(payload.get("token", ""))
+                if viewer_token:
+                    logger.info("Obtained viewer token using session_token")
+                    return viewer_token
+                raise RuntimeError("empty viewer token")
             except Exception as exc:
                 logger.warning("viewer=%s get_viewer_token error: %s", self.viewer_id, exc)
                 await asyncio.sleep(backoff)
                 backoff = min(backoff * 2, 30)
         raise RuntimeError("cannot get viewer token")
+
+    @staticmethod
+    def _get_viewer_token_payload(url: str, headers: dict) -> dict:
+        curl_session = curl_requests.Session()
+        try:
+            response = curl_session.get(
+                url,
+                impersonate="chrome124",
+                headers=headers,
+                timeout=10,
+            )
+            if response.status_code != 200:
+                response.raise_for_status()
+                raise RuntimeError(f"unexpected viewer token status: {response.status_code}")
+            return response.json()
+        finally:
+            curl_session.close()
 
     async def run(self) -> None:
         async with aiohttp.ClientSession() as session:
