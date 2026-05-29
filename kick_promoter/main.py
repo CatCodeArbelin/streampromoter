@@ -66,6 +66,7 @@ def load_config(path: str = "kick_promoter/config.json") -> dict:
         "KICK_CHANNEL": "kick_channel",
         "KICK_CHATROOM_ID": "kick_chatroom_id",
         "CHAT_TOKEN": "chat_token",
+        "SESSION_TOKEN": "session_token",
         "OPENAI_API_KEY": "openai_api_key",
         "GOOGLE_API_KEY": "google_api_key",
         "OPENAI_MODEL": "openai_model",
