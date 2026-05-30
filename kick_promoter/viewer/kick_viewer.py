@@ -175,7 +175,7 @@ class KickViewer:
             max_queue=1,
             compression=None,
             close_timeout=3,
-            additional_headers={"User-Agent": self.user_agent},
+            extra_headers={"User-Agent": self.user_agent, "Origin": "https://kick.com"},
         ) as ws:
             self._ws = ws
             if self._on_ws_connection_change:
@@ -204,7 +204,7 @@ class KickViewer:
         async with websockets.connect(
             uri,
             ping_interval=None,
-            additional_headers={"User-Agent": self.user_agent},
+            extra_headers={"User-Agent": self.user_agent, "Origin": "https://kick.com"},
         ) as ws:
             await ws.send(
                 json.dumps(
