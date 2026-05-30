@@ -30,6 +30,7 @@ class KickViewer:
         self.channel_id = channel_id
         self.chatroom_id = chatroom_id
         self.channel_name = str(self.config.get("kick_channel", "")).strip()
+        self.channel = self.channel_name
         self._token_limiter = token_limiter
         self._running = True
         self._browser = None
@@ -61,13 +62,8 @@ class KickViewer:
         )
 
     async def run(self) -> None:
-        channel_name = self.channel_name
-        if not channel_name:
+        if not self.channel:
             raise RuntimeError("kick_channel is required")
-
-        session_token = str(self.config.get("session_token", "")).strip()
-        if not session_token:
-            raise RuntimeError("session_token is required to run viewer browser")
 
         try:
             if self._startup_jitter_max > 0:
@@ -76,40 +72,66 @@ class KickViewer:
             logger.info(
                 "viewer=%s launching browser for channel=%s",
                 self.viewer_id,
-                channel_name,
+                self.channel,
             )
             async with async_playwright() as p:
-                self._browser = await p.chromium.launch(headless=True)
+                self._browser = await p.chromium.launch(
+                    headless=True,
+                    args=["--no-sandbox"],
+                )
                 self._context = await self._browser.new_context(
-                    user_agent=self.user_agent
+                    user_agent=self.user_agent,
+                    viewport={"width": 1920, "height": 1080},
                 )
-                await self._context.add_cookies(
-                    [
-                        {
-                            "name": "session_token",
-                            "value": session_token,
-                            "domain": ".kick.com",
-                            "path": "/",
-                            "secure": True,
-                            "httpOnly": True,
-                            "sameSite": "Lax",
-                        }
-                    ]
-                )
+
+                session_token = self.config.get("session_token")
+                if session_token:
+                    await self._context.add_cookies(
+                        [
+                            {
+                                "name": "session_token",
+                                "value": str(session_token),
+                                "domain": ".kick.com",
+                                "path": "/",
+                                "secure": True,
+                                "httpOnly": True,
+                                "sameSite": "Lax",
+                            }
+                        ]
+                    )
+
                 self._page = await self._context.new_page()
-                self._page.set_default_timeout(self._playwright_response_timeout_ms)
                 self._page.set_default_navigation_timeout(
                     self._playwright_navigation_timeout_ms
                 )
-                await self._page.goto(
-                    f"https://kick.com/{channel_name}",
-                    wait_until="networkidle",
-                    timeout=self._playwright_navigation_timeout_ms,
-                )
 
-                logger.info("viewer=%s opened Kick page", self.viewer_id)
+                async with self._page.expect_response(
+                    lambda response: "/viewer/v1/token" in response.url
+                    and response.status == 200,
+                    timeout=15000,
+                ) as response_info:
+                    await self._page.goto(
+                        f"https://kick.com/{self.channel}",
+                        wait_until="domcontentloaded",
+                    )
+
+                response = await response_info.value
+                data = await response.json()
+                token = data.get("data", {}).get("token")
+                if not token:
+                    raise RuntimeError(
+                        f"Viewer {self.viewer_id}: failed to get viewer token via browser"
+                    )
+
+                logger.info(
+                    "viewer=%s successfully obtained viewer token via browser",
+                    self.viewer_id,
+                )
                 self._mark_browser_viewer_active()
                 await self._stop_event.wait()
+        except Exception as e:
+            logger.error("Viewer %s failed: %s", self.viewer_id, e, exc_info=True)
+            raise
         finally:
             self._running = False
             self._stop_event.set()
