@@ -54,28 +54,15 @@ class KickViewer:
 
     async def get_viewer_token(self, session: aiohttp.ClientSession) -> str:
         session_token = str(self.config.get("session_token", "")).strip()
+        viewer_token_config = str(self.config.get("viewer_token", "")).strip()
         if not session_token:
             raise RuntimeError("session_token is required to get viewer token")
-
-        if not self.config.get("viewer_token", ""):
+        if not viewer_token_config:
             raise RuntimeError("viewer_token is required to get viewer token")
 
         url = "https://websockets.kick.com/viewer/v1/token"
         headers = {
-            "Authorization": f"Bearer {self.config['session_token']}",
-            "x-client-token": self.config["viewer_token"],
-            "x-app-platform": "web",
-            "Origin": "https://kick.com",
-            "Referer": "https://kick.com/",
-            "User-Agent": self.config["user_agents"][0],
-            "Accept": "application/json",
-            "Accept-Language": "en-US,en;q=0.9",
-            "sec-ch-ua": '"Chromium";v="148", "Google Chrome";v="148", "Not/A)Brand";v="99"',
-            "sec-ch-ua-mobile": "?0",
-            "sec-ch-ua-platform": '"Windows"',
-            "sec-fetch-dest": "empty",
-            "sec-fetch-mode": "cors",
-            "sec-fetch-site": "same-site",
+            "x-client-token": viewer_token_config,
         }
         backoff = 2
         for _ in range(5):
