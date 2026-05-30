@@ -274,18 +274,11 @@ class Runner:
                 logger.info("component=openai_client event=skip reason=openai_disabled")
 
             waiter = asyncio.create_task(self._stop_event.wait(), name="runner-stop-waiter")
-            viewer_wait = asyncio.create_task(self._viewer_pool.wait(), name="viewer-pool-wait")
-            done, pending = await asyncio.wait({waiter, viewer_wait}, return_when=asyncio.FIRST_COMPLETED)
-
-            if waiter in done:
-                logger.info("component=runner event=stop_event_received")
-            elif viewer_wait in done:
-                logger.warning("component=viewer_pool event=completed_or_failed")
-
-            for task in pending:
-                task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await task
+            viewer_wait = self._viewer_pool.wait()
+            try:
+                await asyncio.gather(waiter, viewer_wait)
+            except asyncio.CancelledError:
+                pass
 
             await self.stop()
         except Exception:
