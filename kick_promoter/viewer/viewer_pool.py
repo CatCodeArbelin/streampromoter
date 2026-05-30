@@ -25,6 +25,7 @@ class ViewerPool:
         self._channel_id: str | None = None
         self._chatroom_id: str | None = None
         self._token_limiter = TokenRateLimiter()
+        self._stopped_event = asyncio.Event()
 
     def _emit_telemetry(self) -> None:
         if self._telemetry_callback:
@@ -204,6 +205,7 @@ class ViewerPool:
     async def start(self, ramp_up: float | None = None) -> None:
         if self._running:
             return
+        self._stopped_event = asyncio.Event()
         self._running = True
         count = int(self.config.get("viewer_count", 1))
         self._target_workers = count
@@ -234,11 +236,12 @@ class ViewerPool:
             )
             await asyncio.sleep(interval)
 
-    async def wait(self) -> None:
-        if not self.tasks:
-            return
-        results = await asyncio.gather(*self.tasks, return_exceptions=True)
-        for task, result in zip(self.tasks, results):
+    @staticmethod
+    def _log_viewer_task_results(
+        tasks: list[asyncio.Task],
+        results: list[BaseException | object],
+    ) -> None:
+        for task, result in zip(tasks, results):
             if isinstance(result, asyncio.CancelledError):
                 logger.info("component=viewer_pool event=viewer_cancelled task=%s", task.get_name())
             elif isinstance(result, Exception):
@@ -248,23 +251,34 @@ class ViewerPool:
                     result,
                 )
 
+    async def wait(self) -> None:
+        await self._stopped_event.wait()
+
     async def stop(self) -> None:
         if not self._running:
+            self._stopped_event.set()
             return
         self._running = False
-        await self.graceful_stop()
-        for task in self.tasks:
-            task.cancel()
-        await asyncio.gather(*self.tasks, return_exceptions=True)
-        self._cleanup_done_tasks()
-        self.viewers.clear()
-        if self._status_task:
-            self._status_task.cancel()
-            await asyncio.gather(self._status_task, return_exceptions=True)
-            self._status_task = None
-        logger.info("component=viewer_pool event=stopped")
-        self._active_ws_connections = 0
-        self._emit_telemetry()
+        try:
+            try:
+                await self.graceful_stop()
+            finally:
+                tasks = list(self.tasks)
+                for task in tasks:
+                    task.cancel()
+                results = await asyncio.gather(*tasks, return_exceptions=True) if tasks else []
+                self._log_viewer_task_results(tasks, results)
+                self.tasks.clear()
+                self.viewers.clear()
+                if self._status_task:
+                    self._status_task.cancel()
+                    await asyncio.gather(self._status_task, return_exceptions=True)
+                    self._status_task = None
+                logger.info("component=viewer_pool event=stopped")
+                self._active_ws_connections = 0
+                self._emit_telemetry()
+        finally:
+            self._stopped_event.set()
 
     async def graceful_stop(self) -> None:
         stop_timeout = float(self.config.get("viewer_stop_timeout_sec", 0.5))
