@@ -216,46 +216,62 @@ class Runner:
             self._status = "running"
 
             logger.info("component=runner event=start")
-            logger.info(
-                "component=runner event=checking_channel_live channel=%s",
-                self.config.get("kick_channel"),
-            )
-            logger.info("component=runner event=assert_channel_live")
-            await self._assert_channel_live()
+            try:
+                logger.info(
+                    "component=runner event=checking_channel_live channel=%s",
+                    self.config.get("kick_channel"),
+                )
+                logger.info("component=runner event=assert_channel_live")
+                await self._assert_channel_live()
+            except Exception:
+                logger.exception("component=runner step=assert_channel_live event=failed")
+                raise
 
-            self._session = aiohttp.ClientSession(
-                timeout=aiohttp.ClientTimeout(total=10, connect=5, sock_read=5)
-            )
-            self._viewer_pool = ViewerPool(self.config, telemetry_callback=self._telemetry_callback)
+            try:
+                self._session = aiohttp.ClientSession(
+                    timeout=aiohttp.ClientTimeout(total=10, connect=5, sock_read=5)
+                )
+                self._viewer_pool = ViewerPool(self.config, telemetry_callback=self._telemetry_callback)
+
+                logger.info("component=token_validator event=validate_start")
+                validated_token = await validate_x_client_token(self.config, self._kick_http_client)
+                if validated_token is None:
+                    logger.warning("Could not auto-detect viewer token, using value from config")
+            except Exception:
+                logger.exception("component=runner step=viewer_pool_init event=failed")
+                raise
+
+            try:
+                logger.info("component=viewer_pool event=start")
+                await self._viewer_pool.start()
+            except Exception:
+                logger.exception("component=runner step=viewer_pool_start event=failed")
+                raise
 
             openai_enabled = bool(self.config.get("openai_enabled"))
             if openai_enabled:
-                chat_token = str(self.config.get("chat_token", "")).strip()
-                if not chat_token:
-                    raise RuntimeError("openai_enabled=true requires non-empty chat_token")
+                try:
+                    chat_token = str(self.config.get("chat_token", "")).strip()
+                    if not chat_token:
+                        raise RuntimeError("openai_enabled=true requires non-empty chat_token")
 
-                poster = ChatPoster(
-                    self.config,
-                    session=self._session,
-                    telemetry_callback=self._telemetry_callback,
-                )
-                self._openai_client = OpenAIClient(config=self.config, chat_poster=poster)
+                    poster = ChatPoster(
+                        self.config,
+                        session=self._session,
+                        telemetry_callback=self._telemetry_callback,
+                    )
+                    self._openai_client = OpenAIClient(config=self.config, chat_poster=poster)
+
+                    logger.info("component=openai_client event=start")
+                    self._openai_task = asyncio.create_task(
+                        self._run_openai_with_restarts(),
+                        name="openai-watchdog",
+                    )
+                except Exception:
+                    logger.exception("component=runner step=openai_init event=failed")
+                    raise
             else:
                 logger.info("component=openai_client event=skip reason=openai_disabled")
-
-            logger.info("component=token_validator event=validate_start")
-            validated_token = await validate_x_client_token(self.config, self._kick_http_client)
-            if validated_token is None:
-                logger.warning("Could not auto-detect viewer token, using value from config")
-            logger.info("component=viewer_pool event=start")
-            await self._viewer_pool.start()
-
-            if openai_enabled:
-                logger.info("component=openai_client event=start")
-                self._openai_task = asyncio.create_task(
-                    self._run_openai_with_restarts(),
-                    name="openai-watchdog",
-                )
 
             waiter = asyncio.create_task(self._stop_event.wait(), name="runner-stop-waiter")
             viewer_wait = asyncio.create_task(self._viewer_pool.wait(), name="viewer-pool-wait")
