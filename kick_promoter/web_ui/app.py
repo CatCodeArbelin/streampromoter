@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import threading
+import traceback
 from queue import Queue
 
 from flask import Flask, Response, jsonify, render_template, request
@@ -192,16 +193,21 @@ def start():
             loop.run_until_complete(task)
             task_exc = task.exception() if task.done() and not task.cancelled() else None
             if task_exc is not None:
+                task_tb_text = "".join(traceback.format_exception(type(task_exc), task_exc, task_exc.__traceback__))
                 err_text = str(task_exc) or task_exc.__class__.__name__
-                state.set_lifecycle(status="error", error=err_text)
-                publish_event("lifecycle", phase="error", progress=100, status=state.get_status_snapshot()["status"], message=err_text)
+                full_error = f"{err_text}\n\n{task_tb_text}"
+                state.set_lifecycle(status="error", error=full_error)
+                publish_event("lifecycle", phase="error", progress=100, status=state.get_status_snapshot()["status"], message=full_error)
             elif state.get_status_snapshot()["status"] != "error":
                 state.set_lifecycle(status="stopped")
                 publish_event("lifecycle", phase="stop", progress=100, status=state.get_status_snapshot()["status"], message="Stopped")
         except Exception as exc:
-            state.set_lifecycle(status="error", error=str(exc))
-            publish_event("lifecycle", phase="error", progress=100, status=state.get_status_snapshot()["status"], message=str(exc))
+            tb_text = traceback.format_exc()
+            err_text = str(exc) or exc.__class__.__name__
+            full_error = f"{err_text}\n\n{tb_text}"
             logger.exception("Runner failed with traceback")
+            state.set_lifecycle(status="error", error=full_error)
+            publish_event("lifecycle", phase="error", progress=100, status=state.get_status_snapshot()["status"], message=full_error)
         finally:
             state.set_lifecycle(running=False)
 
