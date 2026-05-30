@@ -10,6 +10,8 @@ import aiohttp
 from curl_cffi import requests as curl_requests
 import websockets
 
+from kick_promoter.viewer.token_limiter import TokenRateLimiter
+
 logger = logging.getLogger(__name__)
 DEFAULT_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -24,12 +26,14 @@ class KickViewer:
         viewer_id: int,
         channel_id: str,
         chatroom_id: str,
+        token_limiter: TokenRateLimiter,
         on_ws_connection_change: Callable[[int], None] | None = None,
     ):
         self.config = config
         self.viewer_id = viewer_id
         self.channel_id = channel_id
         self.chatroom_id = chatroom_id
+        self._token_limiter = token_limiter
         self._running = True
         self._ws: Optional[websockets.WebSocketClientProtocol] = None
         self._ws_uri = "wss://websockets.kick.com/viewer/v1/connect"
@@ -72,16 +76,32 @@ class KickViewer:
             "referer": "https://kick.com/",
             "User-Agent": request_user_agent,
         }
-        backoff = 1
+        backoff = 2
         for _ in range(5):
             try:
                 logger.info("viewer=%s requesting viewer token", self.viewer_id)
-                payload = await asyncio.to_thread(self._get_viewer_token_payload, url, headers)
+                await self._token_limiter.acquire()
+                status_code, payload = await asyncio.to_thread(
+                    self._get_viewer_token_payload, url, headers
+                )
+                if status_code == 429:
+                    logger.warning(
+                        "viewer=%s token request rate-limited, backing off", self.viewer_id
+                    )
+                    await asyncio.sleep(backoff)
+                    backoff = min(backoff * 2, 30)
+                    continue
+
                 viewer_token = str(payload.get("token", ""))
                 if viewer_token:
                     logger.info("Obtained viewer token using session_token")
                     return viewer_token
-                raise RuntimeError("empty viewer token")
+
+                logger.warning(
+                    "viewer=%s token response missing token, backing off", self.viewer_id
+                )
+                await asyncio.sleep(backoff)
+                backoff = min(backoff * 2, 30)
             except Exception as exc:
                 logger.warning("viewer=%s get_viewer_token error: %s", self.viewer_id, exc)
                 await asyncio.sleep(backoff)
@@ -89,7 +109,7 @@ class KickViewer:
         raise RuntimeError("cannot get viewer token")
 
     @staticmethod
-    def _get_viewer_token_payload(url: str, headers: dict) -> dict:
+    def _get_viewer_token_payload(url: str, headers: dict) -> tuple[int, dict]:
         curl_session = curl_requests.Session()
         try:
             response = curl_session.get(
@@ -98,10 +118,13 @@ class KickViewer:
                 headers=headers,
                 timeout=10,
             )
+            if response.status_code == 429:
+                return response.status_code, {}
             if response.status_code != 200:
                 response.raise_for_status()
                 raise RuntimeError(f"unexpected viewer token status: {response.status_code}")
-            return response.json()
+            payload = response.json()
+            return response.status_code, payload if isinstance(payload, dict) else {}
         finally:
             curl_session.close()
 
