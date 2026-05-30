@@ -2,7 +2,7 @@ services:
   viewer-node:
     build: .
     ports:
-      - "5000"
+      - "5000:5000"
     environment:
       NODE_ID: ${NODE_ID:-}
     deploy:

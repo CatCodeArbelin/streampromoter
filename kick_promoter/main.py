@@ -7,6 +7,7 @@ import socket
 from pathlib import Path
 
 import aiohttp
+from curl_cffi import requests as curl_requests
 
 from kick_promoter.ai_bot.chat_poster import ChatPoster
 from kick_promoter.ai_bot.openai_client import OpenAIClient
@@ -117,20 +118,60 @@ class Runner:
             "stopping": self._stop_event.is_set(),
         }
 
+    def _build_kick_channel_headers(self, channel: str) -> dict[str, str]:
+        user_agents = self.config.get("user_agents") or []
+        user_agent = str(user_agents[0]).strip() if user_agents else ""
+        if not user_agent:
+            user_agent = (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/136.0.0.0 Safari/537.36"
+            )
+
+        headers = {
+            "User-Agent": user_agent,
+            "Accept": "application/json",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Origin": "https://kick.com",
+            "Referer": f"https://kick.com/{channel}",
+        }
+
+        session_token = str(self.config.get("session_token", "")).strip()
+        if session_token:
+            headers["Authorization"] = f"Bearer {session_token}"
+
+        x_client_token = str(
+            self.config.get("x_client_token") or self.config.get("viewer_token") or ""
+        ).strip()
+        if x_client_token:
+            headers["x-client-token"] = x_client_token
+
+        return headers
+
+    def _fetch_channel_data(self, channel: str) -> dict:
+        url = f"https://kick.com/api/v2/channels/{channel}"
+        session = curl_requests.Session()
+        try:
+            response = session.get(
+                url,
+                headers=self._build_kick_channel_headers(channel),
+                impersonate="chrome124",
+            )
+            response.raise_for_status()
+            payload = response.json()
+            return payload if isinstance(payload, dict) else {}
+        finally:
+            session.close()
+
     async def _assert_channel_live(self) -> None:
         channel = str(self.config.get("kick_channel", "")).strip()
         if not channel:
             raise RuntimeError("kick_channel is required")
 
-        url = f"https://kick.com/api/v2/channels/{channel}"
-
         try:
-            payload = await self._kick_http_client.get_json(url)
+            payload = await asyncio.to_thread(self._fetch_channel_data, channel)
         except Exception as exc:
             raise RuntimeError("Channel is not live. Load test aborted.") from exc
-
-        if not isinstance(payload, dict):
-            payload = {}
 
         livestream = payload.get("livestream") or {}
         if livestream.get("is_live") is not True:
@@ -173,12 +214,6 @@ class Runner:
 
             self._started = True
             self._status = "running"
-            self._session = aiohttp.ClientSession(
-                timeout=aiohttp.ClientTimeout(total=10, connect=5, sock_read=5)
-            )
-            poster = ChatPoster(self.config, session=self._session, telemetry_callback=self._telemetry_callback)
-            self._viewer_pool = ViewerPool(self.config, telemetry_callback=self._telemetry_callback)
-            self._openai_client = OpenAIClient(config=self.config, chat_poster=poster)
 
             logger.info("component=runner event=start")
             logger.info(
@@ -187,6 +222,14 @@ class Runner:
             )
             logger.info("component=runner event=assert_channel_live")
             await self._assert_channel_live()
+
+            self._session = aiohttp.ClientSession(
+                timeout=aiohttp.ClientTimeout(total=10, connect=5, sock_read=5)
+            )
+            poster = ChatPoster(self.config, session=self._session, telemetry_callback=self._telemetry_callback)
+            self._viewer_pool = ViewerPool(self.config, telemetry_callback=self._telemetry_callback)
+            self._openai_client = OpenAIClient(config=self.config, chat_poster=poster)
+
             logger.info("component=token_validator event=validate_start")
             validated_token = await validate_x_client_token(self.config, self._kick_http_client)
             if validated_token is None:
