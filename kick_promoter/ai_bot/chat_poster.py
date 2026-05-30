@@ -91,6 +91,9 @@ class ChatPoster:
     async def post(self, text: str) -> None:
         chatroom_id = self.config.get("kick_chatroom_id")
         token = self.config.get("chat_token", "")
+        if not str(token).strip():
+            logger.warning("Chat posting skipped: no chat_token")
+            return None
 
         is_valid, reason = self._validator.validate(text=text, chatroom_id=chatroom_id, token=token)
         if not is_valid:
