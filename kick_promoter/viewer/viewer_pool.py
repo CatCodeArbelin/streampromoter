@@ -173,23 +173,27 @@ class ViewerPool:
             return
         self._running = False
         try:
-            try:
-                await self.graceful_stop()
-            finally:
-                tasks = list(self.tasks)
-                for task in tasks:
-                    task.cancel()
-                results = await asyncio.gather(*tasks, return_exceptions=True) if tasks else []
-                self._log_viewer_task_results(tasks, results)
-                self.tasks.clear()
-                self.viewers.clear()
-                if self._status_task:
-                    self._status_task.cancel()
-                    await asyncio.gather(self._status_task, return_exceptions=True)
-                    self._status_task = None
-                logger.info("component=viewer_pool event=stopped")
-                self._active_ws_connections = 0
-                self._emit_telemetry()
+            for viewer in list(self.viewers):
+                try:
+                    await viewer.stop()
+                except Exception:
+                    logger.exception(
+                        "component=viewer_pool event=viewer_stop_failed viewer_id=%s",
+                        viewer.viewer_id,
+                    )
+
+            tasks = list(self.tasks)
+            results = await asyncio.gather(*tasks, return_exceptions=True) if tasks else []
+            self._log_viewer_task_results(tasks, results)
+            self.tasks.clear()
+            self.viewers.clear()
+            if self._status_task:
+                self._status_task.cancel()
+                await asyncio.gather(self._status_task, return_exceptions=True)
+                self._status_task = None
+            logger.info("component=viewer_pool event=stopped")
+            self._active_ws_connections = 0
+            self._emit_telemetry()
         finally:
             self._stopped_event.set()
 
