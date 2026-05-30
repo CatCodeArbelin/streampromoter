@@ -61,7 +61,15 @@ class KickViewer:
             raise RuntimeError("viewer_token is required to get viewer token")
 
         url = "https://websockets.kick.com/viewer/v1/token"
+        user_agents = self.config.get("user_agents")
+        if (
+            not isinstance(user_agents, list)
+            or not user_agents
+            or not str(user_agents[0]).strip()
+        ):
+            raise RuntimeError("user_agents[0] is required to get viewer token")
         headers = {
+            "User-Agent": self.config["user_agents"][0],
             "x-client-token": viewer_token_config,
         }
         backoff = 2
