@@ -226,4 +226,18 @@ class KickViewer:
     async def stop(self) -> None:
         self._running = False
         self._stop_event.set()
-        await self._close_browser_resources()
+
+        browser = self._browser
+        if browser is not None:
+            with contextlib.suppress(Exception):
+                await browser.close()
+
+        self._browser = None
+        self._context = None
+        self._page = None
+
+        playwright = self._playwright
+        self._playwright = None
+        if playwright is not None:
+            with contextlib.suppress(Exception):
+                await playwright.stop()
