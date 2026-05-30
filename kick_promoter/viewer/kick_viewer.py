@@ -166,6 +166,4 @@ class KickViewer:
                     await resource.close()
 
     async def stop(self) -> None:
-        self._running = False
         self._stop_event.set()
-        await self._close_browser_resources()
