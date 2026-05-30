@@ -44,6 +44,7 @@ class KickViewer:
         self._on_ws_connection_change = on_ws_connection_change
         user_agents = self.config.get("user_agents")
         self.user_agent = random.choice(user_agents) if isinstance(user_agents, list) and user_agents else DEFAULT_USER_AGENT
+        self._http_session = curl_requests.Session()
         logger.info(
             "component=kick_viewer event=initialized viewer=%s channel_id=%s chatroom_id=%s ua=%s",
             self.viewer_id,
@@ -107,69 +108,70 @@ class KickViewer:
                 backoff = min(backoff * 2, 30)
         raise RuntimeError("cannot get viewer token")
 
-    @staticmethod
-    def _get_viewer_token_payload(url: str, headers: dict) -> tuple[int, dict]:
-        curl_session = curl_requests.Session()
-        try:
-            response = curl_session.get(
-                url,
-                impersonate="chrome124",
-                headers=headers,
-                timeout=10,
-            )
-            if response.status_code == 429:
-                return response.status_code, {}
-            if response.status_code != 200:
-                response.raise_for_status()
-                raise RuntimeError(f"unexpected viewer token status: {response.status_code}")
-            payload = response.json()
-            return response.status_code, payload if isinstance(payload, dict) else {}
-        finally:
-            curl_session.close()
+    def _get_viewer_token_payload(self, url: str, headers: dict) -> tuple[int, dict]:
+        response = self._http_session.get(
+            url,
+            impersonate="chrome124",
+            headers=headers,
+            timeout=10,
+        )
+        if response.status_code == 429:
+            return response.status_code, {}
+        if response.status_code != 200:
+            response.raise_for_status()
+            raise RuntimeError(f"unexpected viewer token status: {response.status_code}")
+        payload = response.json()
+        return response.status_code, payload if isinstance(payload, dict) else {}
 
     async def run(self) -> None:
-        async with aiohttp.ClientSession() as session:
-            chat_task = None
-            if self.config.get("chat_token", ""):
-                chat_task = asyncio.create_task(self._chat_reconnect_loop(self.chatroom_id))
-            reconnect_attempt = 0
-            reconnect_delay = self._reconnect_base_delay
-            if self._startup_jitter_max > 0:
-                await asyncio.sleep(random.uniform(0, self._startup_jitter_max))
-            while self._running:
-                try:
-                    viewer_token = await self.get_viewer_token(session)
-                    logger.info("viewer=%s connecting to WS", self.viewer_id)
-                    await self._connect_viewer_loop(self.channel_id, viewer_token)
-                    reconnect_attempt = 0
-                    reconnect_delay = self._reconnect_base_delay
-                except asyncio.CancelledError:
-                    raise
-                except Exception as exc:
-                    reconnect_attempt += 1
-                    if self._max_reconnect_attempts and reconnect_attempt > self._max_reconnect_attempts:
-                        logger.error(
-                            "viewer=%s ws reconnect attempts exceeded max=%s",
+        try:
+            async with aiohttp.ClientSession() as session:
+                chat_task = None
+                if self.config.get("chat_token", ""):
+                    chat_task = asyncio.create_task(self._chat_reconnect_loop(self.chatroom_id))
+                reconnect_attempt = 0
+                reconnect_delay = self._reconnect_base_delay
+                if self._startup_jitter_max > 0:
+                    await asyncio.sleep(random.uniform(0, self._startup_jitter_max))
+                while self._running:
+                    try:
+                        viewer_token = await self.get_viewer_token(session)
+                        logger.info("viewer=%s connecting to WS", self.viewer_id)
+                        await self._connect_viewer_loop(self.channel_id, viewer_token)
+                        reconnect_attempt = 0
+                        reconnect_delay = self._reconnect_base_delay
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as exc:
+                        reconnect_attempt += 1
+                        if self._max_reconnect_attempts and reconnect_attempt > self._max_reconnect_attempts:
+                            logger.error(
+                                "viewer=%s ws reconnect attempts exceeded max=%s",
+                                self.viewer_id,
+                                self._max_reconnect_attempts,
+                            )
+                            break
+                        logger.warning(
+                            "viewer=%s ws reconnect attempt=%s delay=%.1fs error=%s",
                             self.viewer_id,
-                            self._max_reconnect_attempts,
+                            reconnect_attempt,
+                            reconnect_delay,
+                            exc,
                         )
-                        break
-                    logger.warning(
-                        "viewer=%s ws reconnect attempt=%s delay=%.1fs error=%s",
-                        self.viewer_id,
-                        reconnect_attempt,
-                        reconnect_delay,
-                        exc,
-                    )
-                    await asyncio.sleep(reconnect_delay)
-                    reconnect_delay = min(reconnect_delay * 2, self._reconnect_max_delay)
-            if chat_task:
-                chat_task.cancel()
-                with contextlib.suppress(Exception):
-                    await chat_task
+                        await asyncio.sleep(reconnect_delay)
+                        reconnect_delay = min(reconnect_delay * 2, self._reconnect_max_delay)
+                if chat_task:
+                    chat_task.cancel()
+                    with contextlib.suppress(Exception):
+                        await chat_task
+        finally:
+            self._http_session.close()
 
     async def _connect_viewer_loop(self, channel_id: str, viewer_token: str) -> None:
+        cookies = self._http_session.cookies.get_dict()
+        cookie_string = "; ".join(f"{k}={v}" for k, v in cookies.items())
         extra_headers = {
+            "Cookie": cookie_string,
             "User-Agent": self.user_agent,
             "Origin": "https://kick.com",
             "Accept-Language": "en-US,en;q=0.9",
