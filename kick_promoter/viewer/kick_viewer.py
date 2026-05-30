@@ -88,10 +88,13 @@ class KickViewer:
                     backoff = min(backoff * 2, 30)
                     continue
 
-                viewer_token = str(payload.get("token", ""))
+                token_data = payload.get("data", {})
+                viewer_token = (
+                    token_data.get("token") if isinstance(token_data, dict) else None
+                )
                 if viewer_token:
                     logger.info("Obtained viewer token using session_token")
-                    return viewer_token
+                    return str(viewer_token)
 
                 logger.warning(
                     "viewer=%s token response missing token, backing off", self.viewer_id
