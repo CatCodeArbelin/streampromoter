@@ -177,6 +177,12 @@ class Runner:
         if livestream.get("is_live") is not True:
             raise RuntimeError("Channel is not live. Load test aborted.")
 
+        channel_id = (
+            livestream.get("id") if isinstance(livestream, dict) else None
+        ) or payload.get("id")
+        if channel_id:
+            self.config["kick_channel_id"] = str(channel_id).strip()
+
     async def _run_openai_with_restarts(self) -> None:
         backoff_sec = 1.0
         max_backoff_sec = float(self.config.get("openai_restart_backoff_max_sec", 30))
