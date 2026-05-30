@@ -2,11 +2,8 @@ import asyncio
 import contextlib
 import logging
 import random
-from collections.abc import Callable
 
 from playwright.async_api import async_playwright
-
-from kick_promoter.viewer.token_limiter import TokenRateLimiter
 
 logger = logging.getLogger(__name__)
 DEFAULT_USER_AGENT = (
@@ -20,18 +17,11 @@ class KickViewer:
         self,
         config: dict,
         viewer_id: int,
-        channel_id: str,
-        chatroom_id: str,
-        token_limiter: TokenRateLimiter,
-        on_ws_connection_change: Callable[[int], None] | None = None,
     ):
         self.config = config
         self.viewer_id = viewer_id
-        self.channel_id = channel_id
-        self.chatroom_id = chatroom_id
         self.channel_name = str(self.config.get("kick_channel", "")).strip()
         self.channel = self.channel_name
-        self._token_limiter = token_limiter
         self._running = True
         self._browser = None
         self._context = None
@@ -44,8 +34,6 @@ class KickViewer:
         self._playwright_response_timeout_ms = int(
             self.config.get("playwright_response_timeout_ms", 15000)
         )
-        self._on_ws_connection_change = on_ws_connection_change
-        self._browser_viewer_active = False
         user_agents = self.config.get("user_agents")
         self.user_agent = (
             random.choice(user_agents)
@@ -53,10 +41,8 @@ class KickViewer:
             else DEFAULT_USER_AGENT
         )
         logger.info(
-            "component=kick_viewer event=initialized viewer=%s channel_id=%s chatroom_id=%s channel_name=%s ua=%s",
+            "component=kick_viewer event=initialized viewer=%s channel_name=%s ua=%s",
             self.viewer_id,
-            self.channel_id,
-            self.chatroom_id,
             self.channel_name,
             self.user_agent,
         )
@@ -108,7 +94,7 @@ class KickViewer:
                 async with self._page.expect_response(
                     lambda response: "/viewer/v1/token" in response.url
                     and response.status == 200,
-                    timeout=15000,
+                    timeout=self._playwright_response_timeout_ms,
                 ) as response_info:
                     await self._page.goto(
                         f"https://kick.com/{self.channel}",
@@ -127,7 +113,6 @@ class KickViewer:
                     "viewer=%s successfully obtained viewer token via browser",
                     self.viewer_id,
                 )
-                self._mark_browser_viewer_active()
                 await self._stop_event.wait()
         except Exception as e:
             logger.error("Viewer %s failed: %s", self.viewer_id, e, exc_info=True)
@@ -137,22 +122,7 @@ class KickViewer:
             self._stop_event.set()
             await self._close_browser_resources()
 
-    def _mark_browser_viewer_active(self) -> None:
-        if self._browser_viewer_active:
-            return
-        self._browser_viewer_active = True
-        if self._on_ws_connection_change:
-            self._on_ws_connection_change(1)
-
-    def _mark_browser_viewer_inactive(self) -> None:
-        if not self._browser_viewer_active:
-            return
-        self._browser_viewer_active = False
-        if self._on_ws_connection_change:
-            self._on_ws_connection_change(-1)
-
     async def _close_browser_resources(self) -> None:
-        self._mark_browser_viewer_inactive()
         page = self._page
         context = self._context
         browser = self._browser
