@@ -42,6 +42,12 @@ class KickViewer:
         self._startup_jitter_max = float(self.config.get("startup_jitter_max", 2))
         self._reconnect_base_delay = float(self.config.get("reconnect_base_delay", 1))
         self._max_reconnect_attempts = int(self.config.get("max_reconnect_attempts", 0))
+        self._playwright_navigation_timeout_ms = int(
+            self.config.get("playwright_navigation_timeout_ms", 30000)
+        )
+        self._playwright_response_timeout_ms = int(
+            self.config.get("playwright_response_timeout_ms", 15000)
+        )
         self._reconnect_max_delay = 30.0
         self._on_ws_connection_change = on_ws_connection_change
         self._browser_viewer_active = False
@@ -141,13 +147,19 @@ class KickViewer:
             ]
         )
         self._page = await self._context.new_page()
+        self._page.set_default_timeout(self._playwright_response_timeout_ms)
+        self._page.set_default_navigation_timeout(
+            self._playwright_navigation_timeout_ms
+        )
 
         async with self._page.expect_response(
-            lambda response: "/viewer/v1/token" in response.url
+            lambda response: "/viewer/v1/token" in response.url,
+            timeout=self._playwright_response_timeout_ms,
         ) as response_info:
             await self._page.goto(
                 f"https://kick.com/{channel_name}",
                 wait_until="networkidle",
+                timeout=self._playwright_navigation_timeout_ms,
             )
         response = await response_info.value
         payload = await response.json()
