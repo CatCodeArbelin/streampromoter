@@ -123,8 +123,49 @@ class ViewerPool:
                     result,
                 )
 
+    @staticmethod
+    def _consume_waiter_result(waiter: asyncio.Future) -> None:
+        try:
+            waiter.result()
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            logger.exception("component=viewer_pool event=waiter_result_consume_failed")
+
+    async def _wait_for_viewer_tasks(self, tasks: list[asyncio.Task]) -> None:
+        gather_future = asyncio.gather(*tasks, return_exceptions=True)
+        try:
+            results = await asyncio.shield(gather_future)
+        except asyncio.CancelledError:
+            gather_future.add_done_callback(self._consume_waiter_result)
+            raise
+        self._log_viewer_task_results(tasks, results)
+
     async def wait(self) -> None:
-        await self._stopped_event.wait()
+        if not self.tasks:
+            await self._stopped_event.wait()
+            return
+
+        viewer_tasks = list(self.tasks)
+        stopped_waiter = asyncio.create_task(
+            self._stopped_event.wait(),
+            name="viewer-pool-stopped-waiter",
+        )
+        viewer_tasks_waiter = asyncio.create_task(
+            self._wait_for_viewer_tasks(viewer_tasks),
+            name="viewer-pool-tasks-waiter",
+        )
+        waiters = {stopped_waiter, viewer_tasks_waiter}
+
+        try:
+            done, pending = await asyncio.wait(waiters, return_when=asyncio.FIRST_COMPLETED)
+            await asyncio.gather(*done)
+        finally:
+            pending_waiters = [waiter for waiter in waiters if not waiter.done()]
+            for waiter in pending_waiters:
+                waiter.cancel()
+            if pending_waiters:
+                await asyncio.gather(*pending_waiters, return_exceptions=True)
 
     async def stop(self) -> None:
         if not self._running:
