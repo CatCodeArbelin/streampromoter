@@ -169,13 +169,22 @@ class KickViewer:
                     await chat_task
 
     async def _connect_viewer_loop(self, channel_id: str, viewer_token: str) -> None:
+        extra_headers = {
+            "User-Agent": self.user_agent,
+            "Origin": "https://kick.com",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Accept-Encoding": "gzip, deflate, br",
+            "Cache-Control": "no-cache",
+            "Pragma": "no-cache",
+            "Sec-WebSocket-Version": "13",
+        }
         async with websockets.connect(
             self._ws_uri,
             ping_interval=None,
             max_queue=1,
             compression=None,
             close_timeout=3,
-            extra_headers={"User-Agent": self.user_agent, "Origin": "https://kick.com"},
+            extra_headers=extra_headers,
         ) as ws:
             self._ws = ws
             if self._on_ws_connection_change:
@@ -201,10 +210,19 @@ class KickViewer:
 
     async def _connect_chat_loop(self, chatroom_id: str) -> None:
         uri = "wss://ws-us2.pusher.com/app/32cbd69e4b950bf97679"
+        extra_headers = {
+            "User-Agent": self.user_agent,
+            "Origin": "https://kick.com",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Accept-Encoding": "gzip, deflate, br",
+            "Cache-Control": "no-cache",
+            "Pragma": "no-cache",
+            "Sec-WebSocket-Version": "13",
+        }
         async with websockets.connect(
             uri,
             ping_interval=None,
-            extra_headers={"User-Agent": self.user_agent, "Origin": "https://kick.com"},
+            extra_headers=extra_headers,
         ) as ws:
             await ws.send(
                 json.dumps(
