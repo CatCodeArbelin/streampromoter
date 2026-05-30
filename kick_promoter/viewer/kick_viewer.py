@@ -44,6 +44,7 @@ class KickViewer:
         self._max_reconnect_attempts = int(self.config.get("max_reconnect_attempts", 0))
         self._reconnect_max_delay = 30.0
         self._on_ws_connection_change = on_ws_connection_change
+        self._browser_viewer_active = False
         user_agents = self.config.get("user_agents")
         self.user_agent = (
             random.choice(user_agents)
@@ -156,15 +157,25 @@ class KickViewer:
             raise RuntimeError("Failed to get viewer token via browser")
 
         logger.info("viewer=%s obtained viewer token via browser", self.viewer_id)
+        self._mark_browser_viewer_active()
+        await self._stop_event.wait()
+
+    def _mark_browser_viewer_active(self) -> None:
+        if self._browser_viewer_active:
+            return
+        self._browser_viewer_active = True
         if self._on_ws_connection_change:
             self._on_ws_connection_change(1)
-        try:
-            await self._stop_event.wait()
-        finally:
-            if self._on_ws_connection_change:
-                self._on_ws_connection_change(-1)
+
+    def _mark_browser_viewer_inactive(self) -> None:
+        if not self._browser_viewer_active:
+            return
+        self._browser_viewer_active = False
+        if self._on_ws_connection_change:
+            self._on_ws_connection_change(-1)
 
     async def _close_browser_resources(self) -> None:
+        self._mark_browser_viewer_inactive()
         page = self._page
         context = self._context
         browser = self._browser
@@ -226,18 +237,4 @@ class KickViewer:
     async def stop(self) -> None:
         self._running = False
         self._stop_event.set()
-
-        browser = self._browser
-        if browser is not None:
-            with contextlib.suppress(Exception):
-                await browser.close()
-
-        self._browser = None
-        self._context = None
-        self._page = None
-
-        playwright = self._playwright
-        self._playwright = None
-        if playwright is not None:
-            with contextlib.suppress(Exception):
-                await playwright.stop()
+        await self._close_browser_resources()
