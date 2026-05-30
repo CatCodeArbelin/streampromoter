@@ -46,7 +46,7 @@ class OpenAIClient:
             self._poster_task = asyncio.create_task(self._poster_loop())
             while self._running:
                 try:
-                    async with websockets.connect(uri, additional_headers=headers, ping_interval=20) as ws:
+                    async with websockets.connect(uri, extra_headers=headers, ping_interval=20) as ws:
                         await ws.send(
                             json.dumps(
                                 {
