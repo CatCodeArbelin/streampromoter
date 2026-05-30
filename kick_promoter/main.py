@@ -278,7 +278,11 @@ class Runner:
             try:
                 await asyncio.gather(waiter, viewer_wait)
             except asyncio.CancelledError:
-                pass
+                logger.warning("component=runner event=cancelled stopping_viewer_pool")
+                if self._viewer_pool:
+                    await self._viewer_pool.stop()
+                await self.stop()
+                raise
 
             await self.stop()
         except Exception:
