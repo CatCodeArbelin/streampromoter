@@ -6,6 +6,7 @@ from collections.abc import Callable
 from curl_cffi import requests
 
 from kick_promoter.viewer.kick_viewer import KickViewer
+from kick_promoter.viewer.token_limiter import TokenRateLimiter
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +24,7 @@ class ViewerPool:
         self._active_ws_connections = 0
         self._channel_id: str | None = None
         self._chatroom_id: str | None = None
+        self._token_limiter = TokenRateLimiter()
 
     def _emit_telemetry(self) -> None:
         if self._telemetry_callback:
@@ -154,6 +156,7 @@ class ViewerPool:
             worker_index + 1,
             channel_id=channel_id,
             chatroom_id=chatroom_id,
+            token_limiter=self._token_limiter,
             on_ws_connection_change=self._on_ws_connection_change,
         )
         task = asyncio.create_task(viewer.run(), name=f"viewer-{worker_index + 1}")
