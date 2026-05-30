@@ -3,13 +3,17 @@ import logging
 import random
 from collections.abc import Callable
 
+from curl_cffi import requests as curl_requests
+
 from kick_promoter.viewer.kick_viewer import KickViewer
 
 logger = logging.getLogger(__name__)
 
 
 class ViewerPool:
-    def __init__(self, config: dict, telemetry_callback: Callable[..., None] | None = None):
+    def __init__(
+        self, config: dict, telemetry_callback: Callable[..., None] | None = None
+    ):
         self.config = config
         self.tasks: list[asyncio.Task] = []
         self.viewers: list[KickViewer] = []
@@ -19,6 +23,7 @@ class ViewerPool:
         self._started_workers = 0
         self._target_workers = 0
         self._active_ws_connections = 0
+        self._channel_id: str | None = None
         self._stopped_event = asyncio.Event()
 
     def _emit_telemetry(self) -> None:
@@ -32,17 +37,101 @@ class ViewerPool:
     def _cleanup_done_tasks(self) -> None:
         self.tasks = [task for task in self.tasks if not task.done()]
 
-    def _create_viewer_task(self, worker_index: int) -> None:
-        viewer = KickViewer(self.config, worker_index + 1)
+    def _build_channel_headers(self, channel: str) -> dict[str, str]:
+        user_agents = self.config.get("user_agents")
+        user_agent = (
+            str(user_agents[0]).strip()
+            if isinstance(user_agents, list) and user_agents
+            else ""
+        )
+        headers = {
+            "User-Agent": user_agent,
+            "Accept": "application/json",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Origin": "https://kick.com",
+            "Referer": f"https://kick.com/{channel}",
+        }
+        if not headers["User-Agent"]:
+            headers["User-Agent"] = (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/136.0.0.0 Safari/537.36"
+            )
+
+        session_token = str(self.config.get("session_token", "")).strip()
+        if session_token:
+            headers["Authorization"] = f"Bearer {session_token}"
+
+        client_token = str(
+            self.config.get("viewer_token") or self.config.get("x_client_token") or ""
+        ).strip()
+        if client_token:
+            headers["x-client-token"] = client_token
+
+        return headers
+
+    def _fetch_channel_id_sync(self, channel: str) -> str:
+        session = curl_requests.Session()
+        try:
+            response = session.get(
+                f"https://kick.com/api/v2/channels/{channel}",
+                headers=self._build_channel_headers(channel),
+                impersonate="chrome124",
+                timeout=10,
+            )
+            response.raise_for_status()
+            payload = response.json()
+            if not isinstance(payload, dict):
+                return ""
+            livestream = payload.get("livestream") or {}
+            channel_id = (
+                livestream.get("id") if isinstance(livestream, dict) else None
+            ) or payload.get("id")
+            return str(channel_id).strip() if channel_id else ""
+        finally:
+            session.close()
+
+    async def get_channel_id(self) -> str:
+        if self._channel_id:
+            return self._channel_id
+
+        configured_channel_id = str(
+            self.config.get("kick_channel_id")
+            or self.config.get("channel_id")
+            or self.config.get("livestream_id")
+            or ""
+        ).strip()
+        if configured_channel_id:
+            self._channel_id = configured_channel_id
+            return self._channel_id
+
+        channel = str(self.config.get("kick_channel", "")).strip()
+        if not channel:
+            raise RuntimeError("kick_channel is required")
+
+        channel_id = await asyncio.to_thread(self._fetch_channel_id_sync, channel)
+        if not channel_id:
+            raise RuntimeError("empty channel id")
+
+        self._channel_id = channel_id
+        self.config["kick_channel_id"] = channel_id
+        return self._channel_id
+
+    def _create_viewer_task(self, worker_index: int, channel_id: str) -> None:
+        viewer = KickViewer(self.config, worker_index + 1, channel_id=channel_id)
         task = asyncio.create_task(viewer.run(), name=f"viewer-{worker_index + 1}")
         self.viewers.append(viewer)
         self.tasks.append(task)
         self._started_workers += 1
         self._emit_telemetry()
 
-    async def start_gradually(self, total_count: int, ramp_up_seconds: float = 60) -> None:
+    async def start_gradually(
+        self, total_count: int, ramp_up_seconds: float = 60
+    ) -> None:
         ramp_up_seconds = max(float(ramp_up_seconds), 0.0)
-        rate = total_count / ramp_up_seconds if ramp_up_seconds > 0 else float(total_count)
+        rate = (
+            total_count / ramp_up_seconds if ramp_up_seconds > 0 else float(total_count)
+        )
         logger.info(
             "component=viewer_pool event=ramp_up_start total_count=%s duration_sec=%s rate=%s",
             total_count,
@@ -55,24 +144,29 @@ class ViewerPool:
         if total_count <= 0:
             return
 
+        channel_id = await self.get_channel_id()
+
         if ramp_up_seconds <= 0:
             for i in range(total_count):
                 if not self._running:
                     break
-                self._create_viewer_task(i)
+                self._create_viewer_task(i, channel_id)
             return
 
         step_interval_sec = ramp_up_seconds / total_count
         for i in range(total_count):
             if not self._running:
                 break
-            self._create_viewer_task(i)
+            self._create_viewer_task(i, channel_id)
             if i == total_count - 1:
                 break
             try:
                 await asyncio.sleep(step_interval_sec)
             except asyncio.CancelledError:
-                logger.info("component=viewer_pool event=ramp_up_cancelled started=%s", self._started_workers)
+                logger.info(
+                    "component=viewer_pool event=ramp_up_cancelled started=%s",
+                    self._started_workers,
+                )
                 raise
 
     async def start(self, ramp_up: float | None = None) -> None:
@@ -88,12 +182,15 @@ class ViewerPool:
         if ramp_up is not None:
             await self.start_gradually(count, ramp_up)
         else:
+            channel_id = await self.get_channel_id()
             self._cleanup_done_tasks()
             for i in range(count):
                 if not self._running:
                     break
-                self._create_viewer_task(i)
-        self._status_task = asyncio.create_task(self._status_loop(), name="viewer-pool-status")
+                self._create_viewer_task(i, channel_id)
+        self._status_task = asyncio.create_task(
+            self._status_loop(), name="viewer-pool-status"
+        )
         logger.info("component=viewer_pool event=started count=%s", count)
 
     async def _status_loop(self) -> None:
@@ -115,7 +212,10 @@ class ViewerPool:
     ) -> None:
         for task, result in zip(tasks, results):
             if isinstance(result, asyncio.CancelledError):
-                logger.info("component=viewer_pool event=viewer_cancelled task=%s", task.get_name())
+                logger.info(
+                    "component=viewer_pool event=viewer_cancelled task=%s",
+                    task.get_name(),
+                )
             elif isinstance(result, Exception):
                 logger.error(
                     "component=viewer_pool event=viewer_failed task=%s error=%s",
@@ -158,7 +258,9 @@ class ViewerPool:
         waiters = {stopped_waiter, viewer_tasks_waiter}
 
         try:
-            done, pending = await asyncio.wait(waiters, return_when=asyncio.FIRST_COMPLETED)
+            done, pending = await asyncio.wait(
+                waiters, return_when=asyncio.FIRST_COMPLETED
+            )
             await asyncio.gather(*done)
         finally:
             pending_waiters = [waiter for waiter in waiters if not waiter.done()]
@@ -183,7 +285,9 @@ class ViewerPool:
                     )
 
             tasks = list(self.tasks)
-            results = await asyncio.gather(*tasks, return_exceptions=True) if tasks else []
+            results = (
+                await asyncio.gather(*tasks, return_exceptions=True) if tasks else []
+            )
             self._log_viewer_task_results(tasks, results)
             self.tasks.clear()
             self.viewers.clear()
