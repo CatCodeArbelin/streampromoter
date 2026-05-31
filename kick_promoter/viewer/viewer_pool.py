@@ -2,6 +2,7 @@ import asyncio
 import logging
 import random
 from collections.abc import Callable
+from typing import Any
 
 from curl_cffi import requests as curl_requests
 
@@ -25,6 +26,9 @@ class ViewerPool:
         self._active_ws_connections = 0
         self._channel_id: str | None = None
         self._stopped_event = asyncio.Event()
+        self._playwright: Any | None = None
+        self._browser: Any | None = None
+        self._browser_context: Any | None = None
 
     def _emit_telemetry(self) -> None:
         if self._telemetry_callback:
@@ -37,26 +41,80 @@ class ViewerPool:
     def _cleanup_done_tasks(self) -> None:
         self.tasks = [task for task in self.tasks if not task.done()]
 
-    def _build_channel_headers(self, channel: str) -> dict[str, str]:
+    def _get_user_agent(self) -> str:
         user_agents = self.config.get("user_agents")
         user_agent = (
             str(user_agents[0]).strip()
             if isinstance(user_agents, list) and user_agents
             else ""
         )
+        if user_agent:
+            return user_agent
+        return (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/136.0.0.0 Safari/537.36"
+        )
+
+    async def _ensure_browser_context(self) -> Any:
+        if self._browser_context:
+            return self._browser_context
+
+        from playwright.async_api import async_playwright
+
+        self._playwright = await async_playwright().start()
+        self._browser = await self._playwright.chromium.launch(
+            headless=bool(self.config.get("viewer_browser_headless", True)),
+            args=["--no-sandbox", "--disable-dev-shm-usage"],
+        )
+        self._browser_context = await self._browser.new_context(
+            user_agent=self._get_user_agent(),
+            locale="en-US",
+        )
+        logger.info("component=viewer_pool event=browser_context_started")
+        return self._browser_context
+
+    async def _close_browser_context(self) -> None:
+        context = self._browser_context
+        browser = self._browser
+        playwright = self._playwright
+        self._browser_context = None
+        self._browser = None
+        self._playwright = None
+
+        if context:
+            try:
+                await context.close()
+            except Exception:
+                logger.debug(
+                    "component=viewer_pool event=browser_context_close_ignored",
+                    exc_info=True,
+                )
+        if browser:
+            try:
+                await browser.close()
+            except Exception:
+                logger.debug(
+                    "component=viewer_pool event=browser_close_ignored",
+                    exc_info=True,
+                )
+        if playwright:
+            try:
+                await playwright.stop()
+            except Exception:
+                logger.debug(
+                    "component=viewer_pool event=playwright_stop_ignored",
+                    exc_info=True,
+                )
+
+    def _build_channel_headers(self, channel: str) -> dict[str, str]:
         headers = {
-            "User-Agent": user_agent,
+            "User-Agent": self._get_user_agent(),
             "Accept": "application/json",
             "Accept-Language": "en-US,en;q=0.9",
             "Origin": "https://kick.com",
             "Referer": f"https://kick.com/{channel}",
         }
-        if not headers["User-Agent"]:
-            headers["User-Agent"] = (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/136.0.0.0 Safari/537.36"
-            )
 
         session_token = str(self.config.get("session_token", "")).strip()
         if session_token:
@@ -118,7 +176,14 @@ class ViewerPool:
         return self._channel_id
 
     def _create_viewer_task(self, worker_index: int, channel_id: str) -> None:
-        viewer = KickViewer(self.config, worker_index + 1, channel_id=channel_id)
+        if not self._browser_context:
+            raise RuntimeError("browser context is not initialized")
+        viewer = KickViewer(
+            self.config,
+            worker_index + 1,
+            channel_id=channel_id,
+            browser_context=self._browser_context,
+        )
         task = asyncio.create_task(viewer.run(), name=f"viewer-{worker_index + 1}")
         self.viewers.append(viewer)
         self.tasks.append(task)
@@ -145,6 +210,7 @@ class ViewerPool:
             return
 
         channel_id = await self.get_channel_id()
+        await self._ensure_browser_context()
 
         if ramp_up_seconds <= 0:
             for i in range(total_count):
@@ -183,6 +249,7 @@ class ViewerPool:
             await self.start_gradually(count, ramp_up)
         else:
             channel_id = await self.get_channel_id()
+            await self._ensure_browser_context()
             self._cleanup_done_tasks()
             for i in range(count):
                 if not self._running:
@@ -271,6 +338,7 @@ class ViewerPool:
 
     async def stop(self) -> None:
         if not self._running:
+            await self._close_browser_context()
             self._stopped_event.set()
             return
         self._running = False
@@ -295,10 +363,12 @@ class ViewerPool:
                 self._status_task.cancel()
                 await asyncio.gather(self._status_task, return_exceptions=True)
                 self._status_task = None
+            await self._close_browser_context()
             logger.info("component=viewer_pool event=stopped")
             self._active_ws_connections = 0
             self._emit_telemetry()
         finally:
+            await self._close_browser_context()
             self._stopped_event.set()
 
     async def graceful_stop(self) -> None:
