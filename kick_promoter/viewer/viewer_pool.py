@@ -5,6 +5,7 @@ from collections.abc import Callable
 from typing import Any
 
 from curl_cffi import requests as curl_requests
+from playwright.async_api import async_playwright
 
 from kick_promoter.viewer.kick_viewer import KickViewer
 
@@ -60,17 +61,12 @@ class ViewerPool:
         if self._browser_context:
             return self._browser_context
 
-        from playwright.async_api import async_playwright
-
         self._playwright = await async_playwright().start()
         self._browser = await self._playwright.chromium.launch(
-            headless=bool(self.config.get("viewer_browser_headless", True)),
-            args=["--no-sandbox", "--disable-dev-shm-usage"],
+            headless=True,
+            args=["--no-sandbox", "--disable-gpu"],
         )
-        self._browser_context = await self._browser.new_context(
-            user_agent=self._get_user_agent(),
-            locale="en-US",
-        )
+        self._browser_context = await self._browser.new_context()
         logger.info("component=viewer_pool event=browser_context_started")
         return self._browser_context
 
