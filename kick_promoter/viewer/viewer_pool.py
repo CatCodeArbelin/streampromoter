@@ -62,11 +62,22 @@ class ViewerPool:
             return self._browser_context
 
         self._playwright = await async_playwright().start()
+        logger.info("component=viewer_pool event=launching_browser")
         self._browser = await self._playwright.chromium.launch(
             headless=True,
             args=["--no-sandbox", "--disable-gpu"],
         )
-        self._browser_context = await self._browser.new_context()
+        logger.info("component=viewer_pool event=browser_launched")
+        try:
+            self._browser_context = await asyncio.wait_for(
+                self._browser.new_context(), timeout=15
+            )
+        except asyncio.TimeoutError:
+            logger.exception(
+                "component=viewer_pool event=browser_context_timeout timeout=15"
+            )
+            await self._close_browser_context()
+            raise
         logger.info("component=viewer_pool event=browser_context_started")
         return self._browser_context
 

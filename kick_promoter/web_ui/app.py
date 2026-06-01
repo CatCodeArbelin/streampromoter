@@ -190,6 +190,7 @@ def start():
         task = loop.create_task(service_manager.runner.start())
         state.set_lifecycle(task=task)
         try:
+            logger.info("component=web_ui event=worker_loop_run_until_complete")
             loop.run_until_complete(task)
             task_exc = task.exception() if task.done() and not task.cancelled() else None
             if task_exc is not None:
@@ -201,6 +202,10 @@ def start():
             elif state.get_status_snapshot()["status"] != "error":
                 state.set_lifecycle(status="stopped")
                 publish_event("lifecycle", phase="stop", progress=100, status=state.get_status_snapshot()["status"], message="Stopped")
+        except asyncio.CancelledError:
+            logger.info("component=web_ui event=worker_task_cancelled")
+            state.set_lifecycle(status="stopped")
+            publish_event("lifecycle", phase="stop", progress=100, status=state.get_status_snapshot()["status"], message="Stopped")
         except Exception as exc:
             tb_text = traceback.format_exc()
             err_text = str(exc) or exc.__class__.__name__
@@ -209,7 +214,13 @@ def start():
             state.set_lifecycle(status="error", error=full_error)
             publish_event("lifecycle", phase="error", progress=100, status=state.get_status_snapshot()["status"], message=full_error)
         finally:
-            state.set_lifecycle(running=False)
+            pending = [pending_task for pending_task in asyncio.all_tasks(loop) if not pending_task.done()]
+            for pending_task in pending:
+                pending_task.cancel()
+            if pending:
+                loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+            loop.close()
+            state.set_lifecycle(running=False, loop=None, task=None, thread=None)
 
     thread = threading.Thread(target=worker, daemon=True)
     thread.start()
@@ -224,15 +235,15 @@ def stop():
         return jsonify({"ok": True, "status": "already_stopped"})
     state.set_lifecycle(status="stopping")
     publish_event("lifecycle", phase="stop", progress=10, status=state.get_status_snapshot()["status"], message="Stopping workers")
-    thread, loop, task = state.get_worker_handles()
+    thread, loop, _task = state.get_worker_handles()
     runner = service_manager.runner
 
     if loop and runner:
         asyncio.run_coroutine_threadsafe(runner.stop(), loop)
         publish_event("lifecycle", phase="stop", progress=50, status=state.get_status_snapshot()["status"], message="Stop requested")
 
-    if task and loop:
-        loop.call_soon_threadsafe(task.cancel)
+    # Runner.start() waits on Runner.stop()'s signal; avoid cancelling the root task
+    # immediately so its cleanup can complete inside loop.run_until_complete(task).
 
     if thread:
         thread.join(timeout=STOP_JOIN_TIMEOUT_SEC)
