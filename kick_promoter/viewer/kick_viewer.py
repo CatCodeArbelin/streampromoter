@@ -78,39 +78,52 @@ class KickViewer:
                 self.channel,
                 self.channel_id,
             )
-            await page.goto(viewer_url, wait_until="domcontentloaded")
-            await page.evaluate(
-                """
-                ({ viewerToken, channelId }) => {
-                    const previousSocket = window.__kickViewerSocket;
-                    if (previousSocket && previousSocket.readyState < WebSocket.CLOSING) {
-                        previousSocket.close();
-                    }
-
-                    const socket = new WebSocket("wss://websockets.kick.com/viewer/v1/connect");
-                    window.__kickViewerSocket = socket;
-                    socket.onopen = () => {
-                        socket.send(JSON.stringify({
-                            event: "pusher:subscribe",
-                            data: {
-                                auth: viewerToken,
-                                channel: `livestream.${channelId}.viewers`,
-                            },
-                        }));
-                    };
-                    socket.onmessage = (event) => {
-                        try {
-                            const payload = JSON.parse(event.data);
-                            if (payload && payload.event === "pusher:ping") {
-                                socket.send(JSON.stringify({ event: "pusher:pong", data: {} }));
-                            }
-                        } catch (error) {
-                            // Ignore non-JSON websocket messages.
+            logger.info("viewer=%s navigating to channel", self.viewer_id)
+            await asyncio.wait_for(
+                page.goto(
+                    viewer_url,
+                    wait_until="domcontentloaded",
+                    timeout=20000,
+                ),
+                timeout=25,
+            )
+            logger.info("viewer=%s navigation complete", self.viewer_id)
+            logger.info("viewer=%s opening WS via JS", self.viewer_id)
+            await asyncio.wait_for(
+                page.evaluate(
+                    """
+                    ({ viewerToken, channelId }) => {
+                        const previousSocket = window.__kickViewerSocket;
+                        if (previousSocket && previousSocket.readyState < WebSocket.CLOSING) {
+                            previousSocket.close();
                         }
-                    };
-                }
-                """,
-                {"viewerToken": viewer_token, "channelId": self.channel_id},
+
+                        const socket = new WebSocket("wss://websockets.kick.com/viewer/v1/connect");
+                        window.__kickViewerSocket = socket;
+                        socket.onopen = () => {
+                            socket.send(JSON.stringify({
+                                event: "pusher:subscribe",
+                                data: {
+                                    auth: viewerToken,
+                                    channel: `livestream.${channelId}.viewers`,
+                                },
+                            }));
+                        };
+                        socket.onmessage = (event) => {
+                            try {
+                                const payload = JSON.parse(event.data);
+                                if (payload && payload.event === "pusher:ping") {
+                                    socket.send(JSON.stringify({ event: "pusher:pong", data: {} }));
+                                }
+                            } catch (error) {
+                                // Ignore non-JSON websocket messages.
+                            }
+                        };
+                    }
+                    """,
+                    {"viewerToken": viewer_token, "channelId": self.channel_id},
+                ),
+                timeout=10,
             )
             logger.info(
                 "viewer=%s subscribed browser websocket channel_id=%s",
@@ -118,6 +131,13 @@ class KickViewer:
                 self.channel_id,
             )
             await self._stop_event.wait()
+        except asyncio.TimeoutError:
+            logger.error(
+                "viewer=%s timed out during browser startup/navigation/ws setup",
+                self.viewer_id,
+                exc_info=True,
+            )
+            raise
         except asyncio.CancelledError:
             raise
         except Exception as e:

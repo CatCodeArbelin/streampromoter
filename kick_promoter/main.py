@@ -207,6 +207,7 @@ class Runner:
             backoff_sec = min(backoff_sec * 2, max_backoff_sec)
 
     async def start(self) -> None:
+        logger.info("component=runner event=start_called")
         try:
             if self._status == "running":
                 logger.info("component=runner event=start_skip reason=already_running")
