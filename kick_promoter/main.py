@@ -11,8 +11,6 @@ from curl_cffi import requests as curl_requests
 
 from kick_promoter.ai_bot.chat_poster import ChatPoster
 from kick_promoter.ai_bot.openai_client import OpenAIClient
-from kick_promoter.kick_http_client import KickHttpClient
-from kick_promoter.token_validator import validate_x_client_token
 from kick_promoter.viewer.viewer_pool import ViewerPool
 
 LOG_FORMAT = "%(asctime)s | %(levelname)s | %(name)s | node_id=%(node_id)s | %(message)s"
@@ -107,7 +105,6 @@ class Runner:
         self._openai_client = None
         self._openai_task = None
         self._telemetry_callback = telemetry_callback
-        self._kick_http_client = KickHttpClient(config)
         self._viewer_pool_stop_timeout_sec = float(self.config.get("viewer_pool_stop_timeout_sec", 15))
         self._openai_stop_timeout_sec = float(self.config.get("openai_stop_timeout_sec", 10))
 
@@ -238,12 +235,11 @@ class Runner:
                 self._session = aiohttp.ClientSession(
                     timeout=aiohttp.ClientTimeout(total=10, connect=5, sock_read=5)
                 )
-                self._viewer_pool = ViewerPool(self.config, telemetry_callback=self._telemetry_callback)
+                viewer_token = self.config.get("viewer_token")
+                if not viewer_token:
+                    raise RuntimeError("viewer_token is required in config")
 
-                logger.info("component=token_validator event=validate_start")
-                validated_token = await validate_x_client_token(self.config, self._kick_http_client)
-                if validated_token is None:
-                    logger.warning("Could not auto-detect viewer token, using value from config")
+                self._viewer_pool = ViewerPool(self.config, telemetry_callback=self._telemetry_callback)
             except Exception:
                 logger.exception("component=runner step=viewer_pool_init event=failed")
                 raise
