@@ -9,9 +9,9 @@ services:
       resources:
         limits:
           cpus: '2'
-          memory: 512M
+          memory: 1024M
     cpus: '2'
-    mem_limit: 512m
+    mem_limit: 1024m
     volumes:
       - ./kick_promoter/config.json:/app/kick_promoter/config.json:ro
       - ./kick_promoter/phrases.txt:/app/kick_promoter/phrases.txt:ro
