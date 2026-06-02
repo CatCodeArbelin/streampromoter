@@ -144,12 +144,11 @@ class ViewerPool:
             rate,
         )
 
-        self._cleanup_done_tasks()
-
         if total_count <= 0:
             return
 
         channel_id = await self.get_channel_id()
+        self._cleanup_done_tasks()
         if ramp_up_seconds <= 0:
             for i in range(total_count):
                 if not self._running:
