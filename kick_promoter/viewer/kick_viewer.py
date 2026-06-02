@@ -1,7 +1,8 @@
 import asyncio
+import json
 import logging
-from typing import Any
 
+import websockets
 from curl_cffi import requests
 
 logger = logging.getLogger(__name__)
@@ -17,17 +18,17 @@ class KickViewer:
         config: dict,
         viewer_id: int,
         channel_id: str,
-        browser_context: Any,
     ):
         self.config = config
         self.viewer_id = viewer_id
         self.channel_id = str(channel_id).strip()
-        self.browser_context = browser_context
         self.channel_name = str(self.config.get("kick_channel", "")).strip()
         self.channel = self.channel_name
         self._running = True
         self._viewer_token: str | None = None
         self._http_session = requests.Session()
+        self._websocket = None
+        self._session_cookies = {}
         self._stop_event = asyncio.Event()
         user_agents = self.config.get("user_agents")
         self.user_agent = (
@@ -49,95 +50,72 @@ class KickViewer:
         if not self.channel_id:
             raise RuntimeError("channel_id is required")
 
-        page = None
         try:
-            viewer_token = await self.get_viewer_token()
-            session_token = str(self.config.get("session_token", "")).strip()
-            if not session_token:
-                raise RuntimeError("session_token is required to open Kick viewer page")
-
-            page = await self.browser_context.new_page()
-            await page.context.add_cookies(
-                [
-                    {
-                        "name": "session_token",
-                        "value": session_token,
-                        "domain": ".kick.com",
-                        "path": "/",
-                        "httpOnly": True,
-                        "secure": True,
-                        "sameSite": "Lax",
-                    }
-                ]
-            )
-
-            viewer_url = f"https://kick.com/{self.channel}"
-            logger.info(
-                "viewer=%s opening Kick page channel=%s channel_id=%s",
-                self.viewer_id,
-                self.channel,
-                self.channel_id,
-            )
-            logger.info("viewer=%s navigating to channel", self.viewer_id)
-            await asyncio.wait_for(
-                page.goto(
-                    viewer_url,
-                    wait_until="domcontentloaded",
-                    timeout=20000,
-                ),
-                timeout=25,
-            )
-            logger.info("viewer=%s navigation complete", self.viewer_id)
-            logger.info("viewer=%s opening WS via JS", self.viewer_id)
-            await asyncio.wait_for(
-                page.evaluate(
-                    """
-                    ({ viewerToken, channelId }) => {
-                        const previousSocket = window.__kickViewerSocket;
-                        if (previousSocket && previousSocket.readyState < WebSocket.CLOSING) {
-                            previousSocket.close();
-                        }
-
-                        const socket = new WebSocket("wss://websockets.kick.com/viewer/v1/connect");
-                        window.__kickViewerSocket = socket;
-                        socket.onopen = () => {
-                            socket.send(JSON.stringify({
-                                event: "pusher:subscribe",
-                                data: {
-                                    auth: viewerToken,
-                                    channel: `livestream.${channelId}.viewers`,
-                                },
-                            }));
-                        };
-                        socket.onmessage = (event) => {
-                            try {
-                                const payload = JSON.parse(event.data);
-                                if (payload && payload.event === "pusher:ping") {
-                                    socket.send(JSON.stringify({ event: "pusher:pong", data: {} }));
-                                }
-                            } catch (error) {
-                                // Ignore non-JSON websocket messages.
-                            }
-                        };
-                    }
-                    """,
-                    {"viewerToken": viewer_token, "channelId": self.channel_id},
-                ),
-                timeout=10,
+            viewer_token = await asyncio.to_thread(self._get_viewer_token_sync)
+            if not viewer_token:
+                raise RuntimeError(
+                    f"Viewer {self.viewer_id}: failed to get viewer token via HTTP"
+                )
+            self._viewer_token = viewer_token
+            self._session_cookies = self._http_session.cookies.get_dict()
+            cookie_string = "; ".join(
+                f"{key}={value}" for key, value in self._session_cookies.items()
             )
             logger.info(
-                "viewer=%s subscribed browser websocket channel_id=%s",
+                "viewer=%s successfully obtained viewer token via HTTP",
                 self.viewer_id,
-                self.channel_id,
             )
-            await self._stop_event.wait()
-        except asyncio.TimeoutError:
-            logger.error(
-                "viewer=%s timed out during browser startup/navigation/ws setup",
-                self.viewer_id,
-                exc_info=True,
-            )
-            raise
+
+            uri = "wss://websockets.kick.com/viewer/v1/connect"
+            headers = {
+                "Cookie": cookie_string,
+                "User-Agent": self.user_agent,
+                "Origin": "https://kick.com",
+                "Accept-Language": "en-US,en;q=0.9",
+                "Cache-Control": "no-cache",
+                "Pragma": "no-cache",
+            }
+            subscribe_payload = {
+                "event": "pusher:subscribe",
+                "data": {
+                    "auth": viewer_token,
+                    "channel": f"livestream.{self.channel_id}.viewers",
+                },
+            }
+
+            async with websockets.connect(uri, extra_headers=headers) as websocket:
+                self._websocket = websocket
+                await websocket.send(json.dumps(subscribe_payload))
+                logger.info(
+                    "viewer=%s subscribed websocket channel_id=%s",
+                    self.viewer_id,
+                    self.channel_id,
+                )
+
+                while not self._stop_event.is_set():
+                    try:
+                        message = await websocket.recv()
+                    except websockets.ConnectionClosed:
+                        if not self._stop_event.is_set():
+                            logger.warning(
+                                "viewer=%s websocket connection closed",
+                                self.viewer_id,
+                                exc_info=True,
+                            )
+                        break
+
+                    try:
+                        payload = json.loads(message)
+                    except json.JSONDecodeError:
+                        continue
+
+                    if (
+                        isinstance(payload, dict)
+                        and payload.get("event") == "pusher:ping"
+                    ):
+                        await websocket.send(
+                            json.dumps({"event": "pusher:pong", "data": {}})
+                        )
         except asyncio.CancelledError:
             raise
         except Exception as e:
@@ -146,15 +124,7 @@ class KickViewer:
         finally:
             self._running = False
             self._stop_event.set()
-            if page:
-                try:
-                    await page.close()
-                except Exception:
-                    logger.debug(
-                        "viewer=%s ignored page close error",
-                        self.viewer_id,
-                        exc_info=True,
-                    )
+            self._websocket = None
             await self._close_http_session()
 
     async def get_viewer_token(self) -> str:
@@ -212,10 +182,21 @@ class KickViewer:
                 await asyncio.to_thread(session.close)
             except Exception:
                 logger.debug(
-                    "viewer=%s ignored HTTP session close error", self.viewer_id,
+                    "viewer=%s ignored HTTP session close error",
+                    self.viewer_id,
                     exc_info=True,
                 )
 
     async def stop(self) -> None:
         self._stop_event.set()
-        await self._close_http_session()
+        websocket = self._websocket
+        if websocket:
+            try:
+                await websocket.close()
+            except Exception:
+                logger.debug(
+                    "viewer=%s ignored websocket close error",
+                    self.viewer_id,
+                    exc_info=True,
+                )
+        await asyncio.to_thread(self._http_session.close)
