@@ -6,4 +6,3 @@ streamlink==7.0.0
 curl_cffi==0.15.0
 ai-cloudscraper>=3.7.0
 google-generativeai
-playwright>=1.44.0,<2.0.0
